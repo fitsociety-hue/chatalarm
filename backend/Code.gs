@@ -3,8 +3,6 @@
 // Google Chat 자동 알림 예약 발송 시스템
 // ============================================================
 
-var SPREADSHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
-
 // Sheet names
 var SHEETS = {
   USERS:     'Users',
@@ -13,10 +11,30 @@ var SHEETS = {
   LOGS:      'Logs',
 };
 
+// ── Spreadsheet ID helper ──────────────────────────────────
+// 바운드 스크립트(시트에 연결된 경우) 자동 감지, 독립 스크립트는
+// 스크립트 속성 SPREADSHEET_ID 를 설정하거나 아래에 직접 입력하세요.
+function getSpreadsheetId() {
+  try {
+    var active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) return active.getId();
+  } catch(e) {}
+  var prop = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  if (prop) return prop;
+  throw new Error('Spreadsheet ID를 찾을 수 없습니다. 스크립트 속성에 SPREADSHEET_ID를 설정하거나 시트 연결 스크립트로 사용하세요.');
+}
+
 // ── CORS / entry point ─────────────────────────────────────
 
 function doGet(e) {
-  var params = e.parameter;
+  // GAS 편집기 실행 버튼 직접 호출 시 e 가 undefined 일 수 있음
+  if (!e || !e.parameter) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: false, message: '웹 앱 URL로 호출해 주세요. 편집기 실행 버튼은 지원되지 않습니다.' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var params   = e.parameter;
   var callback = params.callback;
   var action   = params.action;
   var data     = {};
@@ -68,7 +86,7 @@ function handleAction(action, data) {
 // ── Sheet helpers ───────────────────────────────────────────
 
 function getSheet(name) {
-  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var ss = SpreadsheetApp.openById(getSpreadsheetId());
   var sh = ss.getSheetByName(name);
   if (!sh) {
     sh = ss.insertSheet(name);
