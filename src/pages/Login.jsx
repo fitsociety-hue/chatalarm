@@ -1,41 +1,27 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { fetchGAS } from '../api';
 import { Bell, AlertCircle } from 'lucide-react';
+import PinInput from '../components/PinInput';
 
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [team, setTeam] = useState('');
-  const [pin, setPin] = useState(['', '', '', '']);
+  const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const pinRefs = [useRef(), useRef(), useRef(), useRef()];
-
-  const handlePinChange = (i, val) => {
-    const digit = val.replace(/\D/, '').slice(-1);
-    const next = [...pin];
-    next[i] = digit;
-    setPin(next);
-    if (digit && i < 3) pinRefs[i + 1].current?.focus();
-    if (!digit && i > 0) pinRefs[i - 1].current?.focus();
-  };
-
-  const handlePinKeyDown = (i, e) => {
-    if (e.key === 'Backspace' && !pin[i] && i > 0) pinRefs[i - 1].current?.focus();
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const pinStr = pin.join('');
-    if (!name.trim() || !team.trim() || pinStr.length < 4) {
+    if (!name.trim() || !team.trim() || pin.length < 4) {
       setError('모든 항목을 입력해 주세요.'); return;
     }
     setError(''); setLoading(true);
     try {
-      const res = await fetchGAS('login', { name: name.trim(), team: team.trim(), pin: pinStr });
+      const res = await fetchGAS('login', { name: name.trim(), team: team.trim(), pin: pin });
       if (res.success) {
         login({ name: res.name || name.trim(), team: res.team || team.trim(), id: res.id });
         navigate('/dashboard');
@@ -79,22 +65,7 @@ export default function Login() {
           </div>
           <div className="form-group">
             <label className="form-label">비밀번호 (숫자 4자리)</label>
-            <div className="pin-inputs">
-              {pin.map((d, i) => (
-                <input
-                  key={i}
-                  id={`login-pin-${i}`}
-                  ref={pinRefs[i]}
-                  className="pin-input"
-                  type="password"
-                  inputMode="numeric"
-                  maxLength={1}
-                  value={d}
-                  onChange={e => handlePinChange(i, e.target.value)}
-                  onKeyDown={e => handlePinKeyDown(i, e)}
-                />
-              ))}
-            </div>
+            <PinInput value={pin} onChange={setPin} idPrefix="login-pin" />
           </div>
 
           <button id="login-submit" type="submit" className="btn btn-primary btn-full" disabled={loading} style={{ marginTop: 8 }}>
