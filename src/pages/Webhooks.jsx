@@ -72,10 +72,15 @@ export default function Webhooks() {
         setTimeout(() => setSuccess(''), 5000);
       }
     } catch (e) {
+      let errMsg = e.message || '테스트 전송 중 오류가 발생했습니다.';
+      if (errMsg.includes('알 수 없는 action: testWebhook')) {
+        errMsg = '⚠️ Google Apps Script 백엔드가 아직 업데이트(재배포)되지 않았습니다. chatalarm 폴더 내 [backend/Code.gs] 파일의 소스코드를 전체 복사하여 구글 스크립트 에디터에 덮어씌우신 뒤, [새 버전]으로 배포(Deploy)해 주세요!';
+      }
+      
       if (isModal) {
-        setFormError(e.message || '테스트 전송 중 오류가 발생했습니다.');
+        setFormError(errMsg);
       } else {
-        setError(e.message || '테스트 전송 중 오류가 발생했습니다.');
+        setError(errMsg);
       }
     } finally {
       if (isModal) {
