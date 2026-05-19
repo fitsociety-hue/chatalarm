@@ -72,6 +72,7 @@ function handleAction(action, data) {
       case 'addWebhook':     return addWebhook(data);
       case 'updateWebhook':  return updateWebhook(data);
       case 'deleteWebhook':  return deleteWebhook(data);
+      case 'testWebhook':    return testWebhook(data);
       case 'getSchedules':   return getSchedules(data);
       case 'addSchedule':    return addSchedule(data);
       case 'updateSchedule': return updateSchedule(data);
@@ -321,4 +322,29 @@ function sendScheduledMessages() {
 function logSend(scheduleId, sentAt, status, detail) {
   var sh = getSheet(SHEETS.LOGS);
   sh.appendRow([newId(), scheduleId, sentAt, status, detail]);
+}
+
+function testWebhook(data) {
+  var url = data.url;
+  if (!url || !url.startsWith('https://')) {
+    return { success: false, message: '유효하지 않은 Webhook URL입니다.' };
+  }
+  try {
+    var payload = JSON.stringify({ text: '💬 Google Chat Webhook 연결 테스트에 성공했습니다! (강동어울림복지관 알림 예약 시스템)' });
+    var resp = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: payload,
+      muteHttpExceptions: true,
+    });
+    var code = resp.getResponseCode();
+    var body = resp.getContentText();
+    if (code === 200 || code === 201) {
+      return { success: true, message: '테스트 메시지가 성공적으로 전송되었습니다.' };
+    } else {
+      return { success: false, message: '전송 실패 (HTTP ' + code + '): ' + body.slice(0, 150) };
+    }
+  } catch(e) {
+    return { success: false, message: '연결 오류: ' + e.toString() };
+  }
 }
