@@ -9,7 +9,7 @@ export default function Layout({ children }) {
   const handleLogout = () => { logout(); navigate('/login'); };
 
   return (
-    <div className="app-layout page-wrapper">
+    <div className="app-layout">
       <aside className="sidebar">
         <div className="sidebar-logo">
           <div className="sidebar-logo-icon"><Bell size={20} /></div>

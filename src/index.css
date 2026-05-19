@@ -41,35 +41,7 @@ html, body, #root {
 
 body {
   min-height: 100vh;
-  background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 40%, #bfdbfe 80%, #dde9ff 100%);
-  background-attachment: fixed;
-}
-
-/* ── Animated background blobs ── */
-body::before, body::after {
-  content: '';
-  position: fixed;
-  border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.45;
-  pointer-events: none;
-  z-index: 0;
-  animation: float 12s ease-in-out infinite alternate;
-}
-body::before {
-  width: 520px; height: 520px;
-  background: radial-gradient(circle, #93c5fd, #3b82f6);
-  top: -120px; left: -120px;
-}
-body::after {
-  width: 420px; height: 420px;
-  background: radial-gradient(circle, #a5b4fc, #60a5fa);
-  bottom: -100px; right: -100px;
-  animation-delay: -6s;
-}
-@keyframes float {
-  from { transform: translate(0,0) scale(1); }
-  to   { transform: translate(40px, 30px) scale(1.08); }
+  background: #f0f4f8;
 }
 
 /* ── Page wrapper ── */
