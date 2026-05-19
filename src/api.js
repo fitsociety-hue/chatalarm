@@ -1,5 +1,5 @@
 export const GAS_URL =
-  'https://script.google.com/macros/s/AKfycbzDTHF0pBcgSMU0CAXCW1BJBZfMenPu_FCdTSL_DFHSfIrqEWWvDU1-jjtD14VpN8jPTA/exec';
+  'https://script.google.com/macros/s/AKfycbymetDMvXPg62rt42gEO4VKvQ7SN5hET5gYTmFf_Qp75NFSIxGvnE5nd2OkqLgKY9dAhA/exec';
 
 export const fetchGAS = (action, payload = {}) => {
   const params = new URLSearchParams();
