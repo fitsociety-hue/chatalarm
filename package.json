@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "node restore-src.js && vite",
+    "build": "node restore-src.js && vite build && node copy-build.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
