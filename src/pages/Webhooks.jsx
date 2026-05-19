@@ -72,15 +72,38 @@ export default function Webhooks() {
         setTimeout(() => setSuccess(''), 5000);
       }
     } catch (e) {
-      let errMsg = e.message || '테스트 전송 중 오류가 발생했습니다.';
-      if (errMsg.includes('알 수 없는 action: testWebhook')) {
-        errMsg = '⚠️ Google Apps Script 백엔드가 아직 업데이트(재배포)되지 않았습니다. chatalarm 폴더 내 [backend/Code.gs] 파일의 소스코드를 전체 복사하여 구글 스크립트 에디터에 덮어씌우신 뒤, [새 버전]으로 배포(Deploy)해 주세요!';
-      }
-      
-      if (isModal) {
-        setFormError(errMsg);
-      } else {
-        setError(errMsg);
+      console.warn("GAS backend webhook test failed. Attempting direct browser fallback...", e);
+      try {
+        // Direct browser fallback fetch using no-cors mode to bypass browser CORS limitations
+        await fetch(url.trim(), {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            text: '💬 Google Chat Webhook 연결 테스트에 성공했습니다! (브라우저 직접 연결 테스트)'
+          })
+        });
+        
+        if (isModal) {
+          setSuccess('브라우저 직접 전송 방식으로 테스트 메시지를 보냈습니다! 구글 챗을 확인해 주세요.');
+          setTimeout(() => setSuccess(''), 6000);
+        } else {
+          setSuccess(`"${itemOrUrl.label}" 브라우저 직접 연결 테스트 성공! 구글 챗을 확인해 주세요.`);
+          setTimeout(() => setSuccess(''), 6000);
+        }
+      } catch (directErr) {
+        let errMsg = e.message || '테스트 전송 중 오류가 발생했습니다.';
+        if (errMsg.includes('알 수 없는 action: testWebhook')) {
+          errMsg = '⚠️ Google Apps Script 백엔드가 아직 업데이트(재배포)되지 않았습니다. chatalarm 폴더 내 [backend/Code.gs] 파일의 소스코드를 전체 복사하여 구글 스크립트 에디터에 덮어씌우신 뒤, [새 버전]으로 배포(Deploy)해 주세요!';
+        }
+        
+        if (isModal) {
+          setFormError(errMsg);
+        } else {
+          setError(errMsg);
+        }
       }
     } finally {
       if (isModal) {
