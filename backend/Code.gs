@@ -25,7 +25,12 @@ var SHEETS = {
 function getSpreadsheetId() {
   try {
     var active = SpreadsheetApp.getActiveSpreadsheet();
-    if (active) return active.getId();
+    if (active) {
+      var id = active.getId();
+      // 백그라운드 트리거에서도 사용할 수 있도록 스크립트 속성에 자동 저장
+      PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id);
+      return id;
+    }
   } catch(e) {}
   var prop = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (prop) return prop;
@@ -136,6 +141,7 @@ function handleAction(action, data) {
       case 'deleteSchedule': return deleteSchedule(data);
       case 'getLogs':        return getLogs(data);
       case 'getStatus':      return getStatus(data);
+      case 'triggerSend':    sendScheduledMessages(); return { success: true };
       default: return { success: false, message: '알 수 없는 action: ' + action };
     }
   } catch(e) {
@@ -486,22 +492,33 @@ function sendScheduledMessages() {
   var { headers, rows }            = sheetData(sh);
   var { headers: whH, rows: whRows } = sheetData(wSh);
 
-  // 오늘 이미 OK로 발송된 스케줄 ID 세트
-  var sentTodaySet = {};
+  // 오늘 이미 OK로 발송된 스케줄 ID + 예정시각 키 맵
+  var sentTodayMap = {};
   if (lSh) {
     var { headers: lh, rows: lr } = sheetData(lSh);
     var sidIdx    = lh.indexOf('scheduleId');
     var satIdx    = lh.indexOf('sentAt');
     var stIdx     = lh.indexOf('status');
-    if (sidIdx !== -1 && satIdx !== -1 && stIdx !== -1) {
+    var dtIdx     = lh.indexOf('detail');
+    if (sidIdx !== -1 && satIdx !== -1 && stIdx !== -1 && dtIdx !== -1) {
       lr.forEach(function(r) {
         var d = extractDateFromSentAt(r[satIdx], tz);
         if (d === todayStr && String(r[stIdx]) === 'OK') {
-          sentTodaySet[String(r[sidIdx])] = true;
+          var sId = String(r[sidIdx]);
+          var detailStr = String(r[dtIdx]);
+          // detail에 [Time: HH:mm]이 있는지 매칭
+          var m = detailStr.match(/\[Time:\s*(\d{2}:\d{2})\]/);
+          if (m) {
+            var loggedTime = m[1];
+            sentTodayMap[sId + '_' + loggedTime] = true;
+          } else {
+            // 하위 호환성: 기존 로그에 [Time: ...]이 없는 경우, 안전을 위해 오늘 발송된 것으로 간주
+            sentTodayMap[sId] = true;
+          }
         }
       });
     }
-    Logger.log('[Trigger] 오늘 발송 완료 수=' + Object.keys(sentTodaySet).length);
+    Logger.log('[Trigger] 오늘 발송 완료 맵 크기=' + Object.keys(sentTodayMap).length);
   }
 
   rows.forEach(function(row) {
@@ -547,8 +564,8 @@ function sendScheduledMessages() {
     }
 
     // 5) 오늘 이미 발송됨
-    if (sentTodaySet[sc.id]) {
-      Logger.log('[skip] 오늘 발송 완료: ' + sc.name);
+    if (sentTodayMap[sc.id] || sentTodayMap[sc.id + '_' + schedTime]) {
+      Logger.log('[skip] 오늘 발송 완료: ' + sc.name + ' (scheduled: ' + schedTime + ')');
       return;
     }
 
@@ -565,6 +582,7 @@ function sendScheduledMessages() {
 
     // 7) 발송
     Logger.log('[send] ' + sc.name + ' → ' + wh.url.substring(0, 60) + '...');
+    var logDetailPrefix = '[Time: ' + schedTime + '] ';
     try {
       var resp = UrlFetchApp.fetch(wh.url, {
         method: 'post',
@@ -574,10 +592,10 @@ function sendScheduledMessages() {
       });
       var code   = resp.getResponseCode();
       var status = (code === 200 || code === 201) ? 'OK' : 'FAIL';
-      logSend(sc.id, todayStr + ' ' + nowTime, status, 'HTTP ' + code + ' ' + resp.getContentText().slice(0, 200));
+      logSend(sc.id, todayStr + ' ' + nowTime, status, logDetailPrefix + 'HTTP ' + code + ' ' + resp.getContentText().slice(0, 200));
       Logger.log('[send] ' + status + ' (HTTP ' + code + '): ' + sc.name);
     } catch(err) {
-      logSend(sc.id, todayStr + ' ' + nowTime, 'ERROR', err.toString());
+      logSend(sc.id, todayStr + ' ' + nowTime, 'ERROR', logDetailPrefix + err.toString());
       Logger.log('[send] ERROR: ' + sc.name + ' / ' + err.toString());
     }
   });
