@@ -269,17 +269,52 @@ function deleteSchedule(data) {
 // ── Scheduled trigger: send messages ────────────────────────
 // Set a time-driven trigger: sendScheduledMessages every 1 minute
 
+function formatTimeValueToHHMM(val) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    // If it's a Date object (e.g. from Google Sheets Time cell)
+    // We format it in Asia/Seoul KST to 'HH:mm'
+    return Utilities.formatDate(val, 'Asia/Seoul', 'HH:mm');
+  }
+  var str = String(val).trim();
+  // If it's in ISO format, e.g. "1899-12-30T00:32:08.000Z"
+  if (str.indexOf('T') !== -1) {
+    try {
+      var d = new Date(str);
+      if (!isNaN(d.getTime())) {
+        return Utilities.formatDate(d, 'Asia/Seoul', 'HH:mm');
+      }
+    } catch(e) {}
+  }
+  // If it is already in "HH:mm" or "HH:mm:ss" format
+  var match = str.match(/^(\d{2}):(\d{2})/);
+  if (match) {
+    return match[1] + ':' + match[2];
+  }
+  return str;
+}
+
 function sendScheduledMessages() {
   var now  = new Date();
-  var day  = now.getDay(); // 0=Sun,1=Mon,...,5=Fri,6=Sat
-  var dayMap = { 1:'MON', 2:'TUE', 3:'WED', 4:'THU', 5:'FRI' };
-  var todayCode = dayMap[day];
-  if (!todayCode) return; // Weekend
+  
+  // Calculate day of the week, date and time precisely in Asia/Seoul (KST) timezone
+  var year = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'yyyy'), 10);
+  var month = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'MM'), 10) - 1; // 0-indexed
+  var date = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'dd'), 10);
+  var hour = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'HH'), 10);
+  var minute = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'mm'), 10);
 
-  var hh = String(now.getHours()).padStart(2, '0');
-  var mm = String(now.getMinutes()).padStart(2, '0');
+  // Construct local-equivalent Date object for correct day of the week mapping
+  var localKstDate = new Date(year, month, date, hour, minute);
+  var day  = localKstDate.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  var dayMap = { 1:'MON', 2:'TUE', 3:'WED', 4:'THU', 5:'FRI', 6:'SAT', 0:'SUN' };
+  var todayCode = dayMap[day];
+  if (!todayCode) return; 
+
+  var hh = String(hour).padStart(2, '0');
+  var mm = String(minute).padStart(2, '0');
   var nowTime  = hh + ':' + mm;
-  var todayStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  var todayStr = Utilities.formatDate(now, 'Asia/Seoul', 'yyyy-MM-dd');
 
   var sh = getSheet(SHEETS.SCHEDULES);
   var whSh = getSheet(SHEETS.WEBHOOKS);
@@ -291,12 +326,27 @@ function sendScheduledMessages() {
     if (sc.active === false || sc.active === 'false') return;
 
     var days = [];
-    try { days = JSON.parse(sc.days); } catch(e) {}
+    if (Array.isArray(sc.days)) {
+      days = sc.days;
+    } else {
+      try { days = JSON.parse(sc.days || '[]'); } catch(e) {
+        if (typeof sc.days === 'string') {
+          days = sc.days.split(',').map(function(s) { return s.trim(); });
+        }
+      }
+    }
     if (!days.includes(todayCode)) return;
-    if (sc.time !== nowTime) return;
+
+    // Type-safe & Timezone-safe time comparison
+    var formattedScheduleTime = formatTimeValueToHHMM(sc.time);
+    if (formattedScheduleTime !== nowTime) return;
 
     var excluded = [];
-    try { excluded = JSON.parse(sc.excludedDates); } catch(e) {}
+    if (Array.isArray(sc.excludedDates)) {
+      excluded = sc.excludedDates;
+    } else {
+      try { excluded = JSON.parse(sc.excludedDates || '[]'); } catch(e) {}
+    }
     if (excluded.includes(todayStr)) return;
 
     // Find webhook
