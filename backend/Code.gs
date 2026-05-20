@@ -264,6 +264,9 @@ function deleteWebhook(data) {
 // ── Schedules ─────────────────────────────────────────────────
 function getSchedules(data) {
   var ss = SpreadsheetApp.openById(getSpreadsheetId());
+  if (ss.getSpreadsheetTimeZone() !== 'Asia/Seoul') {
+    try { ss.setSpreadsheetTimeZone('Asia/Seoul'); } catch(e) {}
+  }
   var tz = ss.getSpreadsheetTimeZone();
   var sh = ss.getSheetByName(SHEETS.SCHEDULES);
   if (!sh) return { success: true, data: [] };
@@ -376,6 +379,9 @@ function getStatus(data) {
   } catch(e) {}
 
   var ss = SpreadsheetApp.openById(getSpreadsheetId());
+  if (ss.getSpreadsheetTimeZone() !== 'Asia/Seoul') {
+    try { ss.setSpreadsheetTimeZone('Asia/Seoul'); } catch(e) {}
+  }
   var tz = ss.getSpreadsheetTimeZone();
 
   // 오늘 발송 이력 요약
@@ -479,6 +485,13 @@ function sendScheduledMessages() {
   Logger.log('[Trigger] KST=' + todayStr + ' ' + nowTime + ' (' + todayCode + ')');
 
   var ss  = SpreadsheetApp.openById(getSpreadsheetId());
+  if (ss.getSpreadsheetTimeZone() !== 'Asia/Seoul') {
+    try {
+      ss.setSpreadsheetTimeZone('Asia/Seoul');
+    } catch(e) {
+      Logger.log('[Trigger] Timezone alignment failed: ' + e.toString());
+    }
+  }
   var tz  = ss.getSpreadsheetTimeZone();
   var sh  = ss.getSheetByName(SHEETS.SCHEDULES);
   var wSh = ss.getSheetByName(SHEETS.WEBHOOKS);
@@ -508,11 +521,24 @@ function sendScheduledMessages() {
           var detailStr = String(r[dtIdx]);
           // detail에 [Time: HH:mm]이 있는지 매칭
           var m = detailStr.match(/\[Time:\s*(\d{2}:\d{2})\]/);
+          var loggedTime = '';
           if (m) {
-            var loggedTime = m[1];
+            loggedTime = m[1];
+          } else {
+            // 하위 호환성: 기존 로그에 [Time: ...]이 없는 경우, sentAt의 시간 부분을 사용
+            if (r[satIdx] instanceof Date) {
+              loggedTime = Utilities.formatDate(r[satIdx], tz, 'HH:mm');
+            } else {
+              var tMatch = String(r[satIdx]).match(/(\d{2}):(\d{2})/);
+              if (tMatch) {
+                loggedTime = tMatch[1] + ':' + tMatch[2];
+              }
+            }
+          }
+          if (loggedTime) {
             sentTodayMap[sId + '_' + loggedTime] = true;
           } else {
-            // 하위 호환성: 기존 로그에 [Time: ...]이 없는 경우, 안전을 위해 오늘 발송된 것으로 간주
+            // 정말 파싱할 수 없는 경우에만 보수적으로 오늘 발송된 것으로 간주
             sentTodayMap[sId] = true;
           }
         }
