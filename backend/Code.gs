@@ -203,7 +203,11 @@ function deleteWebhook(data) {
 // ── Schedules ───────────────────────────────────────────────
 
 function getSchedules(data) {
-  var sh = getSheet(SHEETS.SCHEDULES);
+  var ss = SpreadsheetApp.openById(getSpreadsheetId());
+  var tz = ss.getSpreadsheetTimeZone();
+  var sh = ss.getSheetByName(SHEETS.SCHEDULES);
+  if (!sh) return { success: true, data: [] };
+  
   var { headers, rows } = sheetData(sh);
   var userIdx = headers.indexOf('userId');
   var result = rows
@@ -213,6 +217,10 @@ function getSchedules(data) {
       try { obj.days = JSON.parse(obj.days); } catch(e) { obj.days = []; }
       try { obj.excludedDates = JSON.parse(obj.excludedDates); } catch(e) { obj.excludedDates = []; }
       obj.active = obj.active !== false && obj.active !== 'false';
+      
+      // 프론트엔드로 전달하기 전에 안전하게 HH:mm 형식의 문자열로 변환하여 시각 왜곡 차단
+      obj.time = formatTimeValueToHHMM(obj.time, tz);
+      
       return obj;
     });
   return { success: true, data: result };
@@ -318,17 +326,39 @@ function sendScheduledMessages() {
   var nowTime  = hh + ':' + mm;
   var todayStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(date).padStart(2, '0');
 
-  // 스프레드시트 객체 및 고유 시간대 획득 (한 번만 수행)
+  // 스프레드시트 객체 및 고유 시간대 획득
   var ss = SpreadsheetApp.openById(getSpreadsheetId());
   var tz = ss.getSpreadsheetTimeZone();
 
   var sh = ss.getSheetByName(SHEETS.SCHEDULES);
   var whSh = ss.getSheetByName(SHEETS.WEBHOOKS);
+  var logSh = ss.getSheetByName(SHEETS.LOGS);
   
-  if (!sh || !whSh) return; // 시트가 없으면 조기 종료
+  if (!sh || !whSh) return;
   
   var { headers, rows } = sheetData(sh);
   var { headers: whH, rows: whRows } = sheetData(whSh);
+  
+  // 2. 오늘 이미 성공적으로 발송된 스케줄 ID 조회 (중복 전송 예방)
+  var sentTodaySet = {};
+  if (logSh) {
+    var { headers: logH, rows: logRows } = sheetData(logSh);
+    var scheduleIdIdx = logH.indexOf('scheduleId');
+    var sentAtIdx = logH.indexOf('sentAt');
+    var statusIdx = logH.indexOf('status');
+    
+    if (scheduleIdIdx !== -1 && sentAtIdx !== -1 && statusIdx !== -1) {
+      logRows.forEach(function(r) {
+        var sentAtVal = String(r[sentAtIdx]); // 예: "2026-05-20 11:05"
+        var statusVal = String(r[statusIdx]);
+        var schedId = String(r[scheduleIdIdx]);
+        // 오늘 날짜로 시작하고 상태가 'OK'인 로그만 추출
+        if (sentAtVal.indexOf(todayStr) === 0 && statusVal === 'OK') {
+          sentTodaySet[schedId] = true;
+        }
+      });
+    }
+  }
 
   rows.forEach(function(row) {
     var sc = rowToObj(headers, row);
@@ -346,17 +376,27 @@ function sendScheduledMessages() {
     }
     if (!days.includes(todayCode)) return;
 
+    // 발송 제외일(excludedDates) 체크
+    var excludedDates = [];
+    if (Array.isArray(sc.excludedDates)) {
+      excludedDates = sc.excludedDates;
+    } else {
+      try { excludedDates = JSON.parse(sc.excludedDates || '[]'); } catch(e) {
+        if (typeof sc.excludedDates === 'string') {
+          excludedDates = sc.excludedDates.split(',').map(function(s) { return s.trim(); });
+        }
+      }
+    }
+    if (excludedDates.indexOf(todayStr) !== -1) return;
+
     // 안전한 스프레드시트 시간대 기반 시간 비교
     var formattedScheduleTime = formatTimeValueToHHMM(sc.time, tz);
-    if (formattedScheduleTime !== nowTime) return;
+    
+    // [개선] 스케줄 설정 시각이 아직 되지 않았다면 건너뜀
+    if (nowTime < formattedScheduleTime) return;
 
-    var excluded = [];
-    if (Array.isArray(sc.excludedDates)) {
-      excluded = sc.excludedDates;
-    } else {
-      try { excluded = JSON.parse(sc.excludedDates || '[]'); } catch(e) {}
-    }
-    if (excluded.includes(todayStr)) return;
+    // [개선] 이미 오늘 성공적으로 발송된 이력이 있으면 중복 발송 예방을 위해 건너뜀
+    if (sentTodaySet[sc.id]) return;
 
     // 웹훅 매칭 및 알림 발송
     var whRow = whRows.find(function(r) { return rowToObj(whH, r).id === sc.webhookId; });
