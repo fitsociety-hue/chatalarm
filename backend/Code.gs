@@ -315,6 +315,7 @@ function updateSchedule(data) {
       setVal('webhookId',     data.webhookId);
       setVal('excludedDates', JSON.stringify(data.excludedDates || []));
       setVal('active',        data.active !== false);
+      setVal('createdAt',     new Date().toISOString());
       return { success: true };
     }
   }
@@ -587,6 +588,29 @@ function sendScheduledMessages() {
     if (nowTime < schedTime) {
       Logger.log('[skip] 아직 시각 아님: ' + sc.name + ' (' + schedTime + ')');
       return;
+    }
+
+    // 4.5) 금일 생성/수정 여부 및 시각 비교 (소급 발송 방지)
+    if (sc.createdAt) {
+      try {
+        var createdMs = new Date(sc.createdAt).getTime() + 9 * 3600000;
+        var createdKst = new Date(createdMs);
+        var cYear   = createdKst.getUTCFullYear();
+        var cMonth  = createdKst.getUTCMonth();
+        var cDate   = createdKst.getUTCDate();
+        var cHour   = createdKst.getUTCHours();
+        var cMinute = createdKst.getUTCMinutes();
+        
+        var createdDateStr = cYear + '-' + String(cMonth + 1).padStart(2, '0') + '-' + String(cDate).padStart(2, '0');
+        var createdTimeStr = String(cHour).padStart(2, '0') + ':' + String(cMinute).padStart(2, '0');
+
+        if (createdDateStr === todayStr && createdTimeStr > schedTime) {
+          Logger.log('[skip] 금일 생성/수정됨 (생성시간 ' + createdTimeStr + ' > 예약시간 ' + schedTime + '): ' + sc.name);
+          return;
+        }
+      } catch(e) {
+        Logger.log('[error] createdAt 파싱 실패 (스킵하지 않고 진행): ' + e.toString());
+      }
     }
 
     // 5) 오늘 이미 발송됨
