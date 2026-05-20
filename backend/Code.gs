@@ -269,24 +269,25 @@ function deleteSchedule(data) {
 // ── Scheduled trigger: send messages ────────────────────────
 // Set a time-driven trigger: sendScheduledMessages every 1 minute
 
-function formatTimeValueToHHMM(val) {
+function formatTimeValueToHHMM(val, tz) {
   if (!val) return '';
   if (val instanceof Date) {
-    // If it's a Date object (e.g. from Google Sheets Time cell)
-    // We format it in Asia/Seoul KST to 'HH:mm'
-    return Utilities.formatDate(val, 'Asia/Seoul', 'HH:mm');
+    // 스프레드시트 고유의 시간대를 사용하여 1899년 역사적 오프셋 불일치를 완벽히 예방
+    var timezone = tz || 'GMT+09:00';
+    return Utilities.formatDate(val, timezone, 'HH:mm');
   }
   var str = String(val).trim();
-  // If it's in ISO format, e.g. "1899-12-30T00:32:08.000Z"
+  // ISO 형식 확인 예: "1899-12-30T00:32:08.000Z"
   if (str.indexOf('T') !== -1) {
     try {
       var d = new Date(str);
       if (!isNaN(d.getTime())) {
-        return Utilities.formatDate(d, 'Asia/Seoul', 'HH:mm');
+        var timezone = tz || 'GMT+09:00';
+        return Utilities.formatDate(d, timezone, 'HH:mm');
       }
     } catch(e) {}
   }
-  // If it is already in "HH:mm" or "HH:mm:ss" format
+  // "HH:mm" 또는 "HH:mm:ss" 형식 확인
   var match = str.match(/^(\d{2}):(\d{2})/);
   if (match) {
     return match[1] + ':' + match[2];
@@ -297,16 +298,17 @@ function formatTimeValueToHHMM(val) {
 function sendScheduledMessages() {
   var now  = new Date();
   
-  // Calculate day of the week, date and time precisely in Asia/Seoul (KST) timezone
-  var year = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'yyyy'), 10);
-  var month = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'MM'), 10) - 1; // 0-indexed
-  var date = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'dd'), 10);
-  var hour = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'HH'), 10);
-  var minute = parseInt(Utilities.formatDate(now, 'Asia/Seoul', 'mm'), 10);
-
-  // Construct local-equivalent Date object for correct day of the week mapping
-  var localKstDate = new Date(year, month, date, hour, minute);
-  var day  = localKstDate.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  // 1. KST(UTC+9) 기준의 정확한 밀리초 시각 계산 (실행 환경의 시간대/로캘 영향을 배제)
+  var kstMs = now.getTime() + (9 * 60 * 60 * 1000);
+  var kstDate = new Date(kstMs);
+  
+  var year = kstDate.getUTCFullYear();
+  var month = kstDate.getUTCMonth(); // 0-indexed
+  var date = kstDate.getUTCDate();
+  var hour = kstDate.getUTCHours();
+  var minute = kstDate.getUTCMinutes();
+  var day  = kstDate.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  
   var dayMap = { 1:'MON', 2:'TUE', 3:'WED', 4:'THU', 5:'FRI', 6:'SAT', 0:'SUN' };
   var todayCode = dayMap[day];
   if (!todayCode) return; 
@@ -314,10 +316,17 @@ function sendScheduledMessages() {
   var hh = String(hour).padStart(2, '0');
   var mm = String(minute).padStart(2, '0');
   var nowTime  = hh + ':' + mm;
-  var todayStr = Utilities.formatDate(now, 'Asia/Seoul', 'yyyy-MM-dd');
+  var todayStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(date).padStart(2, '0');
 
-  var sh = getSheet(SHEETS.SCHEDULES);
-  var whSh = getSheet(SHEETS.WEBHOOKS);
+  // 스프레드시트 객체 및 고유 시간대 획득 (한 번만 수행)
+  var ss = SpreadsheetApp.openById(getSpreadsheetId());
+  var tz = ss.getSpreadsheetTimeZone();
+
+  var sh = ss.getSheetByName(SHEETS.SCHEDULES);
+  var whSh = ss.getSheetByName(SHEETS.WEBHOOKS);
+  
+  if (!sh || !whSh) return; // 시트가 없으면 조기 종료
+  
   var { headers, rows } = sheetData(sh);
   var { headers: whH, rows: whRows } = sheetData(whSh);
 
@@ -337,8 +346,8 @@ function sendScheduledMessages() {
     }
     if (!days.includes(todayCode)) return;
 
-    // Type-safe & Timezone-safe time comparison
-    var formattedScheduleTime = formatTimeValueToHHMM(sc.time);
+    // 안전한 스프레드시트 시간대 기반 시간 비교
+    var formattedScheduleTime = formatTimeValueToHHMM(sc.time, tz);
     if (formattedScheduleTime !== nowTime) return;
 
     var excluded = [];
@@ -349,7 +358,7 @@ function sendScheduledMessages() {
     }
     if (excluded.includes(todayStr)) return;
 
-    // Find webhook
+    // 웹훅 매칭 및 알림 발송
     var whRow = whRows.find(function(r) { return rowToObj(whH, r).id === sc.webhookId; });
     if (!whRow) return;
     var wh = rowToObj(whH, whRow);
