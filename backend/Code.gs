@@ -1,9 +1,16 @@
 // ============================================================
-// ChatAlarm – Google Apps Script Backend
+// ChatAlarm – Google Apps Script Backend  v2.1
 // Google Chat 자동 알림 예약 발송 시스템
 // ============================================================
+//
+// [설치 방법]
+//  1. 이 파일 전체를 GAS 편집기에 붙여넣기 후 저장(Ctrl+S)
+//  2. 편집기 상단 함수 선택란에서 [installTrigger] 를 선택 후 실행(▶)
+//     → 1분 주기 트리거가 자동 등록됩니다 (기존 트리거 중복 방지)
+//  3. [배포] → [배포 관리] → [새 버전 생성] 후 배포 완료
+// ============================================================
 
-// Sheet names
+// ── Sheet names ─────────────────────────────────────────────
 var SHEETS = {
   USERS:     'Users',
   WEBHOOKS:  'Webhooks',
@@ -11,9 +18,7 @@ var SHEETS = {
   LOGS:      'Logs',
 };
 
-// ── Spreadsheet ID helper ──────────────────────────────────
-// 바운드 스크립트(시트에 연결된 경우) 자동 감지, 독립 스크립트는
-// 스크립트 속성 SPREADSHEET_ID 를 설정하거나 아래에 직접 입력하세요.
+// ── Spreadsheet ID helper ────────────────────────────────────
 function getSpreadsheetId() {
   try {
     var active = SpreadsheetApp.getActiveSpreadsheet();
@@ -24,10 +29,27 @@ function getSpreadsheetId() {
   throw new Error('Spreadsheet ID를 찾을 수 없습니다. 스크립트 속성에 SPREADSHEET_ID를 설정하거나 시트 연결 스크립트로 사용하세요.');
 }
 
-// ── CORS / entry point ─────────────────────────────────────
+// ── 트리거 자동 설치 (1분 주기) ─────────────────────────────
+// GAS 편집기에서 [installTrigger] 함수를 한 번 실행하면 됩니다.
+function installTrigger() {
+  // 기존에 등록된 sendScheduledMessages 트리거 모두 제거 (중복 방지)
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'sendScheduledMessages') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  // 1분 주기 트리거 새로 등록
+  ScriptApp.newTrigger('sendScheduledMessages')
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+  Logger.log('✅ 트리거 설치 완료: sendScheduledMessages (1분 주기)');
+}
+
+// ── CORS / entry point ──────────────────────────────────────
 
 function doGet(e) {
-  // GAS 편집기 실행 버튼 직접 호출 시 e 가 undefined 일 수 있음
   if (!e || !e.parameter) {
     return ContentService
       .createTextOutput(JSON.stringify({ success: false, message: '웹 앱 URL로 호출해 주세요. 편집기 실행 버튼은 지원되지 않습니다.' }))
@@ -43,7 +65,6 @@ function doGet(e) {
   var result = handleAction(action, data);
 
   if (callback) {
-    // JSONP
     return ContentService
       .createTextOutput(callback + '(' + JSON.stringify(result) + ')')
       .setMimeType(ContentService.MimeType.JAVASCRIPT);
@@ -61,7 +82,7 @@ function doPost(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// ── Router ─────────────────────────────────────────────────
+// ── Router ──────────────────────────────────────────────────
 
 function handleAction(action, data) {
   try {
@@ -84,7 +105,7 @@ function handleAction(action, data) {
   }
 }
 
-// ── Sheet helpers ───────────────────────────────────────────
+// ── Sheet helpers ────────────────────────────────────────────
 
 function getSheet(name) {
   var ss = SpreadsheetApp.openById(getSpreadsheetId());
@@ -122,12 +143,11 @@ function newId() {
   return Utilities.getUuid();
 }
 
-// ── Users ───────────────────────────────────────────────────
+// ── Users ────────────────────────────────────────────────────
 
 function registerUser(data) {
   var sh = getSheet(SHEETS.USERS);
   var { headers, rows } = sheetData(sh);
-  // Check duplicate
   var nameIdx = headers.indexOf('name');
   var teamIdx = headers.indexOf('team');
   for (var i = 0; i < rows.length; i++) {
@@ -152,7 +172,7 @@ function loginUser(data) {
   return { success: false, message: '이름, 팀명 또는 비밀번호가 일치하지 않습니다.' };
 }
 
-// ── Webhooks ────────────────────────────────────────────────
+// ── Webhooks ─────────────────────────────────────────────────
 
 function getWebhooks(data) {
   var sh = getSheet(SHEETS.WEBHOOKS);
@@ -200,14 +220,14 @@ function deleteWebhook(data) {
   return { success: false, message: 'Webhook을 찾을 수 없습니다.' };
 }
 
-// ── Schedules ───────────────────────────────────────────────
+// ── Schedules ─────────────────────────────────────────────────
 
 function getSchedules(data) {
   var ss = SpreadsheetApp.openById(getSpreadsheetId());
   var tz = ss.getSpreadsheetTimeZone();
   var sh = ss.getSheetByName(SHEETS.SCHEDULES);
   if (!sh) return { success: true, data: [] };
-  
+
   var { headers, rows } = sheetData(sh);
   var userIdx = headers.indexOf('userId');
   var result = rows
@@ -217,10 +237,8 @@ function getSchedules(data) {
       try { obj.days = JSON.parse(obj.days); } catch(e) { obj.days = []; }
       try { obj.excludedDates = JSON.parse(obj.excludedDates); } catch(e) { obj.excludedDates = []; }
       obj.active = obj.active !== false && obj.active !== 'false';
-      
-      // 프론트엔드로 전달하기 전에 안전하게 HH:mm 형식의 문자열로 변환하여 시각 왜곡 차단
+      // 프론트엔드로 전달하기 전에 HH:mm 형식으로 정규화 (시간대 왜곡 방지)
       obj.time = formatTimeValueToHHMM(obj.time, tz);
-      
       return obj;
     });
   return { success: true, data: result };
@@ -274,28 +292,25 @@ function deleteSchedule(data) {
   return { success: false, message: '스케줄을 찾을 수 없습니다.' };
 }
 
-// ── Scheduled trigger: send messages ────────────────────────
-// Set a time-driven trigger: sendScheduledMessages every 1 minute
-
+// ── 시간 포맷 헬퍼 ────────────────────────────────────────────
+// 스프레드시트의 Date 객체, ISO 문자열, "HH:mm" 등 모든 형식을 "HH:mm"으로 정규화
 function formatTimeValueToHHMM(val, tz) {
   if (!val) return '';
+  var timezone = tz || 'Asia/Seoul';
   if (val instanceof Date) {
-    // 스프레드시트 고유의 시간대를 사용하여 1899년 역사적 오프셋 불일치를 완벽히 예방
-    var timezone = tz || 'GMT+09:00';
     return Utilities.formatDate(val, timezone, 'HH:mm');
   }
   var str = String(val).trim();
-  // ISO 형식 확인 예: "1899-12-30T00:32:08.000Z"
+  // ISO 형식: "1899-12-30T00:27:00.000Z" 또는 일반 ISO
   if (str.indexOf('T') !== -1) {
     try {
       var d = new Date(str);
       if (!isNaN(d.getTime())) {
-        var timezone = tz || 'GMT+09:00';
         return Utilities.formatDate(d, timezone, 'HH:mm');
       }
     } catch(e) {}
   }
-  // "HH:mm" 또는 "HH:mm:ss" 형식 확인
+  // "HH:mm" 또는 "HH:mm:ss"
   var match = str.match(/^(\d{2}):(\d{2})/);
   if (match) {
     return match[1] + ':' + match[2];
@@ -303,106 +318,172 @@ function formatTimeValueToHHMM(val, tz) {
   return str;
 }
 
+// ── KST 기준 오늘 날짜 문자열 "YYYY-MM-DD" 반환 ──────────────
+function getKSTDateString(kstDate) {
+  var year  = kstDate.getUTCFullYear();
+  var month = String(kstDate.getUTCMonth() + 1).padStart(2, '0');
+  var date  = String(kstDate.getUTCDate()).padStart(2, '0');
+  return year + '-' + month + '-' + date;
+}
+
+// ── Logs 시트의 sentAt 셀 값을 "YYYY-MM-DD" 문자열로 안전하게 추출 ──
+// 스프레드시트가 Date 객체로 자동 변환해도 정상 동작
+function extractDateFromSentAt(sentAtVal, tz) {
+  if (!sentAtVal) return '';
+  var timezone = tz || 'Asia/Seoul';
+  if (sentAtVal instanceof Date) {
+    // 스프레드시트가 Date 객체로 파싱한 경우
+    return Utilities.formatDate(sentAtVal, timezone, 'yyyy-MM-dd');
+  }
+  var str = String(sentAtVal).trim();
+  // "2026-05-20 11:27" 또는 "2026-05-20T11:27:00" 형식
+  var match = str.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  // 영문 Date 문자열: "Tue May 20 2026 11:27:00 GMT+0900"
+  try {
+    var d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      return Utilities.formatDate(d, timezone, 'yyyy-MM-dd');
+    }
+  } catch(e) {}
+  return str.substring(0, 10);
+}
+
+// ── 예약 알림 발송 (1분 트리거로 자동 실행) ─────────────────
 function sendScheduledMessages() {
-  var now  = new Date();
-  
-  // 1. KST(UTC+9) 기준의 정확한 밀리초 시각 계산 (실행 환경의 시간대/로캘 영향을 배제)
-  var kstMs = now.getTime() + (9 * 60 * 60 * 1000);
+  var now = new Date();
+
+  // KST(UTC+9) 기준 시각 계산 (서버 로케일 무관하게 항상 KST)
+  var kstMs   = now.getTime() + (9 * 60 * 60 * 1000);
   var kstDate = new Date(kstMs);
-  
-  var year = kstDate.getUTCFullYear();
-  var month = kstDate.getUTCMonth(); // 0-indexed
-  var date = kstDate.getUTCDate();
-  var hour = kstDate.getUTCHours();
+
+  var year   = kstDate.getUTCFullYear();
+  var month  = kstDate.getUTCMonth();       // 0-indexed
+  var date   = kstDate.getUTCDate();
+  var hour   = kstDate.getUTCHours();
   var minute = kstDate.getUTCMinutes();
-  var day  = kstDate.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  
-  var dayMap = { 1:'MON', 2:'TUE', 3:'WED', 4:'THU', 5:'FRI', 6:'SAT', 0:'SUN' };
+  var day    = kstDate.getUTCDay();         // 0=Sun,1=Mon,...,6=Sat
+
+  var dayMap = { 0:'SUN', 1:'MON', 2:'TUE', 3:'WED', 4:'THU', 5:'FRI', 6:'SAT' };
   var todayCode = dayMap[day];
-  if (!todayCode) return; 
 
-  var hh = String(hour).padStart(2, '0');
-  var mm = String(minute).padStart(2, '0');
-  var nowTime  = hh + ':' + mm;
-  var todayStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(date).padStart(2, '0');
+  var hh      = String(hour).padStart(2, '0');
+  var mm      = String(minute).padStart(2, '0');
+  var nowTime = hh + ':' + mm;
+  var todayStr = getKSTDateString(kstDate);
 
-  // 스프레드시트 객체 및 고유 시간대 획득
+  Logger.log('[sendScheduledMessages] KST 시각: ' + todayStr + ' ' + nowTime + ' (' + todayCode + ')');
+
+  // 스프레드시트 및 시간대 획득
   var ss = SpreadsheetApp.openById(getSpreadsheetId());
   var tz = ss.getSpreadsheetTimeZone();
 
-  var sh = ss.getSheetByName(SHEETS.SCHEDULES);
-  var whSh = ss.getSheetByName(SHEETS.WEBHOOKS);
+  var sh    = ss.getSheetByName(SHEETS.SCHEDULES);
+  var whSh  = ss.getSheetByName(SHEETS.WEBHOOKS);
   var logSh = ss.getSheetByName(SHEETS.LOGS);
-  
-  if (!sh || !whSh) return;
-  
-  var { headers, rows } = sheetData(sh);
+
+  if (!sh || !whSh) {
+    Logger.log('[sendScheduledMessages] Schedules 또는 Webhooks 시트 없음 → 종료');
+    return;
+  }
+
+  var { headers, rows }       = sheetData(sh);
   var { headers: whH, rows: whRows } = sheetData(whSh);
-  
-  // 2. 오늘 이미 성공적으로 발송된 스케줄 ID 조회 (중복 전송 예방)
+
+  // 오늘 이미 성공적으로 발송된 스케줄 ID 세트 구성 (중복 발송 방지)
   var sentTodaySet = {};
   if (logSh) {
     var { headers: logH, rows: logRows } = sheetData(logSh);
     var scheduleIdIdx = logH.indexOf('scheduleId');
-    var sentAtIdx = logH.indexOf('sentAt');
-    var statusIdx = logH.indexOf('status');
-    
+    var sentAtIdx     = logH.indexOf('sentAt');
+    var statusIdx     = logH.indexOf('status');
+
     if (scheduleIdIdx !== -1 && sentAtIdx !== -1 && statusIdx !== -1) {
       logRows.forEach(function(r) {
-        var sentAtVal = String(r[sentAtIdx]); // 예: "2026-05-20 11:05"
-        var statusVal = String(r[statusIdx]);
-        var schedId = String(r[scheduleIdIdx]);
-        // 오늘 날짜로 시작하고 상태가 'OK'인 로그만 추출
-        if (sentAtVal.indexOf(todayStr) === 0 && statusVal === 'OK') {
+        var sentDateStr = extractDateFromSentAt(r[sentAtIdx], tz); // "YYYY-MM-DD"
+        var statusVal   = String(r[statusIdx]);
+        var schedId     = String(r[scheduleIdIdx]);
+        if (sentDateStr === todayStr && statusVal === 'OK') {
           sentTodaySet[schedId] = true;
         }
       });
     }
+    Logger.log('[sendScheduledMessages] 오늘 발송 완료 스케줄 수: ' + Object.keys(sentTodaySet).length);
   }
 
+  // 각 스케줄 순회 및 발송 판단
   rows.forEach(function(row) {
     var sc = rowToObj(headers, row);
+
+    // 1) 비활성 스케줄 스킵
     if (sc.active === false || sc.active === 'false') return;
 
+    // 2) 요일 파싱
     var days = [];
     if (Array.isArray(sc.days)) {
       days = sc.days;
     } else {
       try { days = JSON.parse(sc.days || '[]'); } catch(e) {
-        if (typeof sc.days === 'string') {
+        if (typeof sc.days === 'string' && sc.days.trim()) {
           days = sc.days.split(',').map(function(s) { return s.trim(); });
         }
       }
     }
-    if (!days.includes(todayCode)) return;
 
-    // 발송 제외일(excludedDates) 체크
+    // 3) 오늘 요일 포함 여부 확인
+    if (days.indexOf(todayCode) === -1) return;
+
+    // 4) 발송 제외일 확인
     var excludedDates = [];
     if (Array.isArray(sc.excludedDates)) {
       excludedDates = sc.excludedDates;
     } else {
       try { excludedDates = JSON.parse(sc.excludedDates || '[]'); } catch(e) {
-        if (typeof sc.excludedDates === 'string') {
+        if (typeof sc.excludedDates === 'string' && sc.excludedDates.trim()) {
           excludedDates = sc.excludedDates.split(',').map(function(s) { return s.trim(); });
         }
       }
     }
-    if (excludedDates.indexOf(todayStr) !== -1) return;
+    if (excludedDates.indexOf(todayStr) !== -1) {
+      Logger.log('[skip] 제외일 스케줄: ' + sc.name);
+      return;
+    }
 
-    // 안전한 스프레드시트 시간대 기반 시간 비교
+    // 5) 스케줄 시각을 "HH:mm"으로 정규화
     var formattedScheduleTime = formatTimeValueToHHMM(sc.time, tz);
-    
-    // [개선] 스케줄 설정 시각이 아직 되지 않았다면 건너뜀
-    if (nowTime < formattedScheduleTime) return;
+    if (!formattedScheduleTime) {
+      Logger.log('[skip] 시각 파싱 실패: ' + sc.name + ' / 원본 time=' + sc.time);
+      return;
+    }
 
-    // [개선] 이미 오늘 성공적으로 발송된 이력이 있으면 중복 발송 예방을 위해 건너뜀
-    if (sentTodaySet[sc.id]) return;
+    // 6) 현재 시각이 스케줄 시각 이후인지 확인 (>= 비교: 트리거 지연에도 발송 보장)
+    if (nowTime < formattedScheduleTime) {
+      Logger.log('[skip] 아직 시각 아님: ' + sc.name + ' (' + formattedScheduleTime + ' > ' + nowTime + ')');
+      return;
+    }
 
-    // 웹훅 매칭 및 알림 발송
-    var whRow = whRows.find(function(r) { return rowToObj(whH, r).id === sc.webhookId; });
-    if (!whRow) return;
+    // 7) 오늘 이미 성공 발송 여부 확인 (중복 방지)
+    if (sentTodaySet[sc.id]) {
+      Logger.log('[skip] 오늘 이미 발송: ' + sc.name);
+      return;
+    }
+
+    // 8) 웹훅 URL 조회
+    var whRow = null;
+    for (var wi = 0; wi < whRows.length; wi++) {
+      if (rowToObj(whH, whRows[wi]).id === sc.webhookId) {
+        whRow = whRows[wi];
+        break;
+      }
+    }
+    if (!whRow) {
+      Logger.log('[skip] 웹훅 없음: ' + sc.name + ' webhookId=' + sc.webhookId);
+      return;
+    }
     var wh = rowToObj(whH, whRow);
 
+    // 9) Google Chat 메시지 발송
+    Logger.log('[send] 발송 시작: ' + sc.name + ' → ' + wh.url.substring(0, 50) + '...');
     try {
       var payload = JSON.stringify({ text: sc.message });
       var resp = UrlFetchApp.fetch(wh.url, {
@@ -411,11 +492,18 @@ function sendScheduledMessages() {
         payload: payload,
         muteHttpExceptions: true,
       });
-      logSend(sc.id, todayStr + ' ' + nowTime, resp.getResponseCode() === 200 ? 'OK' : 'FAIL', resp.getContentText().slice(0, 200));
+      var code   = resp.getResponseCode();
+      var body   = resp.getContentText().slice(0, 200);
+      var status = (code === 200 || code === 201) ? 'OK' : 'FAIL';
+      logSend(sc.id, todayStr + ' ' + nowTime, status, 'HTTP ' + code + ' ' + body);
+      Logger.log('[send] 결과: ' + status + ' (HTTP ' + code + ') / ' + sc.name);
     } catch(e) {
       logSend(sc.id, todayStr + ' ' + nowTime, 'ERROR', e.toString());
+      Logger.log('[send] 오류: ' + sc.name + ' / ' + e.toString());
     }
   });
+
+  Logger.log('[sendScheduledMessages] 실행 완료');
 }
 
 function logSend(scheduleId, sentAt, status, detail) {
@@ -423,13 +511,15 @@ function logSend(scheduleId, sentAt, status, detail) {
   sh.appendRow([newId(), scheduleId, sentAt, status, detail]);
 }
 
+// ── Webhook 연결 테스트 ──────────────────────────────────────
+
 function testWebhook(data) {
   var url = data.url;
   if (!url || !url.startsWith('https://')) {
     return { success: false, message: '유효하지 않은 Webhook URL입니다.' };
   }
   try {
-    var payload = JSON.stringify({ text: '💬 Google Chat Webhook 연결 테스트에 성공했습니다! (강동어울림복지관 알림 예약 시스템)' });
+    var payload = JSON.stringify({ text: '💬 Google Chat Webhook 연결 테스트에 성공했습니다! (ChatAlarm 알림 예약 시스템)' });
     var resp = UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
