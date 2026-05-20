@@ -4,6 +4,44 @@ import { fetchGAS } from '../api';
 import Layout from '../components/Layout';
 import { Plus, Pencil, Trash2, X, AlertCircle, CheckCircle, CalendarClock, Calendar } from 'lucide-react';
 
+const formatToKST = (timeStr) => {
+  if (!timeStr || timeStr === '-') return '-';
+  
+  // Clean HH:MM format check
+  if (typeof timeStr === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(timeStr)) {
+    return timeStr.substring(0, 5);
+  }
+  
+  // ISO Timestamp or similar
+  if (typeof timeStr === 'string' && timeStr.includes('T')) {
+    try {
+      const date = new Date(timeStr);
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleTimeString('ko-KR', {
+          timeZone: 'Asia/Seoul',
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      }
+    } catch (err) {
+      console.warn('KST time parse error:', err);
+    }
+  }
+
+  // Raw split fallback
+  if (typeof timeStr === 'string' && timeStr.includes('T')) {
+    try {
+      const timePart = timeStr.split('T')[1].substring(0, 5);
+      return timePart;
+    } catch (err) {
+      console.warn('KST time split error:', err);
+    }
+  }
+  
+  return String(timeStr);
+};
+
 const DAY_LABELS = ['월', '화', '수', '목', '금'];
 const DAY_VALUES = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
 
@@ -55,7 +93,7 @@ export default function Schedule() {
     setForm({
       name: item.name,
       days: item.days || ['MON','TUE','WED','THU','FRI'],
-      time: item.time || '09:00',
+      time: formatToKST(item.time) || '09:00',
       message: item.message || '',
       webhookId: item.webhookId || '',
       excludedDates: item.excludedDates || [],
@@ -159,7 +197,7 @@ export default function Schedule() {
                     </span>
                   </div>
                   <div className="schedule-meta">
-                    <strong>{daysLabel(item.days)}</strong> · <strong>{item.time}</strong> · {webhookLabel(item.webhookId)}
+                    <strong>{daysLabel(item.days)}</strong> · <strong>{formatToKST(item.time)}</strong> · {webhookLabel(item.webhookId)}
                   </div>
                   {item.excludedDates?.length > 0 && (
                     <div className="schedule-meta" style={{ marginTop: 4 }}>

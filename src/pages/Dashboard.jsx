@@ -4,6 +4,44 @@ import { fetchGAS } from '../api';
 import Layout from '../components/Layout';
 import { Bell, Webhook, CalendarClock, CheckCircle, AlertCircle } from 'lucide-react';
 
+const formatToKST = (timeStr) => {
+  if (!timeStr || timeStr === '-') return '-';
+  
+  // Clean HH:MM format check
+  if (typeof timeStr === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(timeStr)) {
+    return timeStr.substring(0, 5);
+  }
+  
+  // ISO Timestamp or similar
+  if (typeof timeStr === 'string' && timeStr.includes('T')) {
+    try {
+      const date = new Date(timeStr);
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleTimeString('ko-KR', {
+          timeZone: 'Asia/Seoul',
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      }
+    } catch (err) {
+      console.warn('KST time parse error:', err);
+    }
+  }
+
+  // Raw split fallback
+  if (typeof timeStr === 'string' && timeStr.includes('T')) {
+    try {
+      const timePart = timeStr.split('T')[1].substring(0, 5);
+      return timePart;
+    } catch (err) {
+      console.warn('KST time split error:', err);
+    }
+  }
+  
+  return String(timeStr);
+};
+
 export default function Dashboard() {
   const { user } = useAuth();
   const [stats, setStats] = useState({ webhooks: 0, schedules: 0, nextSend: '-' });
@@ -23,8 +61,12 @@ export default function Dashboard() {
         const active = (sc.data || []).filter(s => s.active);
         let nextSend = '-';
         if (active.length > 0) {
-          const times = active.map(s => s.time).sort();
-          nextSend = times[0] ? times[0] + ' 발송 예정' : '-';
+          const rawTimes = active.map(s => s.time).filter(Boolean);
+          if (rawTimes.length > 0) {
+            // Sort raw times but format the earliest one
+            rawTimes.sort();
+            nextSend = rawTimes[0] ? formatToKST(rawTimes[0]) + ' 발송 예정' : '-';
+          }
         }
         setStats({ webhooks, schedules, nextSend });
       })
