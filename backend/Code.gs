@@ -156,8 +156,39 @@ function getSheet(name) {
   if (!sh) {
     sh = ss.insertSheet(name);
     initSheet(sh, name);
+  } else {
+    ensureSheetHeaders(sh, name);
   }
   return sh;
+}
+
+function ensureSheetHeaders(sh, name) {
+  var expectedHeaders = {
+    Users:     ['id','name','team','pin','createdAt'],
+    Webhooks:  ['id','userId','label','url','createdAt'],
+    Schedules: ['id','userId','name','days','time','message','webhookId','excludedDates','active','createdAt'],
+    Logs:      ['id','scheduleId','userId','sentAt','status','detail'],
+  };
+  var expected = expectedHeaders[name];
+  if (!expected) return;
+  
+  var colCount = sh.getLastColumn();
+  var range = sh.getRange(1, 1, 1, colCount || 1);
+  var current = range.getValues()[0] || [];
+  
+  if (current.length === 0 || !current[0]) {
+    sh.getRange(1, 1, 1, expected.length).setValues([expected]);
+    return;
+  }
+  
+  if (name === SHEETS.LOGS) {
+    var userIdIdx = current.indexOf('userId');
+    if (userIdIdx === -1) {
+      sh.insertColumnAfter(2); // B열 뒤에 삽입 (C열)
+      sh.getRange(1, 3).setValue('userId');
+      Logger.log('[ensureSheetHeaders] Logs 시트에 userId 컬럼을 추가했습니다.');
+    }
+  }
 }
 
 function initSheet(sh, name) {
@@ -165,7 +196,7 @@ function initSheet(sh, name) {
     Users:     [['id','name','team','pin','createdAt']],
     Webhooks:  [['id','userId','label','url','createdAt']],
     Schedules: [['id','userId','name','days','time','message','webhookId','excludedDates','active','createdAt']],
-    Logs:      [['id','scheduleId','sentAt','status','detail']],
+    Logs:      [['id','scheduleId','userId','sentAt','status','detail']],
   };
   if (headers[name]) {
     sh.getRange(1,1,1,headers[name][0].length).setValues(headers[name]);
@@ -398,17 +429,38 @@ function getLogs(data) {
 
   var scSh = ss.getSheetByName(SHEETS.SCHEDULES);
   var scheduleNameMap = {};
+  var scheduleUserMap = {};
   if (scSh) {
     var { headers: scH, rows: scRows } = sheetData(scSh);
     scRows.forEach(function(r) {
       var sc = rowToObj(scH, r);
       scheduleNameMap[sc.id] = sc.name || sc.id;
+      scheduleUserMap[sc.id] = sc.userId;
     });
   }
 
   var { headers, rows } = sheetData(logSh);
+  var userIdIdx = headers.indexOf('userId');
+  var scheduleIdIdx = headers.indexOf('scheduleId');
+
+  // 사용자 ID 기준으로 필터링
+  var filteredRows = rows.filter(function(r) {
+    // 1) 로그에 userId 컬럼이 있고 값이 기입되어 있다면 직접 매칭
+    if (userIdIdx !== -1 && r[userIdIdx]) {
+      return r[userIdIdx] === data.userId;
+    }
+    
+    // 2) 과거 빈 로그의 경우 scheduleId를 통해 스케줄 소유자와 대조 (폴백)
+    var scId = r[scheduleIdIdx];
+    if (scId && scheduleUserMap[scId]) {
+      return scheduleUserMap[scId] === data.userId;
+    }
+    
+    return false;
+  });
+
   // 최신 순 정렬 (최대 30건)
-  var recent = rows.slice().reverse().slice(0, 30);
+  var recent = filteredRows.slice().reverse().slice(0, 30);
   var result = recent.map(function(r) {
     var obj = rowToObj(headers, r);
     var sentAtVal = obj.sentAt;
@@ -442,6 +494,18 @@ function getStatus(data) {
 
   // 오늘 발송 이력 요약
   var logSh = ss.getSheetByName(SHEETS.LOGS);
+  var scSh = ss.getSheetByName(SHEETS.SCHEDULES);
+  
+  // scheduleId -> userId 매핑 준비 (폴백용)
+  var scheduleUserMap = {};
+  if (scSh) {
+    var { headers: scH, rows: scRows } = sheetData(scSh);
+    scRows.forEach(function(r) {
+      var sc = rowToObj(scH, r);
+      scheduleUserMap[sc.id] = sc.userId;
+    });
+  }
+
   var todayCount  = 0;
   var todayOk     = 0;
   var todayFail   = 0;
@@ -455,7 +519,23 @@ function getStatus(data) {
     var { headers: lh, rows: lr } = sheetData(logSh);
     var sentAtIdx = lh.indexOf('sentAt');
     var statusIdx = lh.indexOf('status');
+    var userIdIdx = lh.indexOf('userId');
+    var scheduleIdIdx = lh.indexOf('scheduleId');
+
     lr.forEach(function(r) {
+      // 이 로그가 본인 데이터인지 검증
+      var isBelongsToUser = false;
+      if (userIdIdx !== -1 && r[userIdIdx]) {
+        isBelongsToUser = (r[userIdIdx] === data.userId);
+      } else {
+        var scId = r[scheduleIdIdx];
+        if (scId && scheduleUserMap[scId]) {
+          isBelongsToUser = (scheduleUserMap[scId] === data.userId);
+        }
+      }
+
+      if (!isBelongsToUser) return; // 본인 로그가 아니면 스킵
+
       var sentAtRaw = r[sentAtIdx];
       var sentDateStr = '';
       if (sentAtRaw instanceof Date) {
@@ -697,19 +777,19 @@ function sendScheduledMessages() {
       });
       var code   = resp.getResponseCode();
       var status = (code === 200 || code === 201) ? 'OK' : 'FAIL';
-      logSend(sc.id, todayStr + ' ' + nowTime, status, logDetailPrefix + 'HTTP ' + code + ' ' + resp.getContentText().slice(0, 200));
+      logSend(sc.id, sc.userId, todayStr + ' ' + nowTime, status, logDetailPrefix + 'HTTP ' + code + ' ' + resp.getContentText().slice(0, 200));
       Logger.log('[send] ' + status + ' (HTTP ' + code + '): ' + sc.name);
     } catch(err) {
-      logSend(sc.id, todayStr + ' ' + nowTime, 'ERROR', logDetailPrefix + err.toString());
+      logSend(sc.id, sc.userId, todayStr + ' ' + nowTime, 'ERROR', logDetailPrefix + err.toString());
       Logger.log('[send] ERROR: ' + sc.name + ' / ' + err.toString());
     }
   });
   Logger.log('[Trigger] 완료');
 }
 
-function logSend(scheduleId, sentAt, status, detail) {
+function logSend(scheduleId, userId, sentAt, status, detail) {
   var sh = getSheet(SHEETS.LOGS);
-  sh.appendRow([newId(), scheduleId, sentAt, status, detail]);
+  sh.appendRow([newId(), scheduleId, userId, sentAt, status, detail]);
 }
 
 // ── Webhook 테스트 ─────────────────────────────────────────
