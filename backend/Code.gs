@@ -167,7 +167,14 @@ function initSheet(sh, name) {
     Schedules: [['id','userId','name','days','time','message','webhookId','excludedDates','active','createdAt']],
     Logs:      [['id','scheduleId','sentAt','status','detail']],
   };
-  if (headers[name]) sh.getRange(1,1,1,headers[name][0].length).setValues(headers[name]);
+  if (headers[name]) {
+    sh.getRange(1,1,1,headers[name][0].length).setValues(headers[name]);
+    if (name === SHEETS.USERS) {
+      try {
+        sh.getRange('D:D').setNumberFormat('@');
+      } catch(e) {}
+    }
+  }
 }
 
 function sheetData(sh) {
@@ -186,6 +193,45 @@ function newId() {
   return Utilities.getUuid();
 }
 
+// ── 암호화 / 복호화 헬퍼 (Simple Reversible Encryption) ────────────────
+var SECRET_KEY = 'chatalarm_secret_key_2026';
+
+function encryptPin(pin) {
+  if (!pin) return '';
+  var pinStr = String(pin);
+  var encrypted = '';
+  for (var i = 0; i < pinStr.length; i++) {
+    var charCode = pinStr.charCodeAt(i);
+    var keyChar = SECRET_KEY.charCodeAt(i % SECRET_KEY.length);
+    var xor = charCode ^ keyChar;
+    encrypted += ('0' + xor.toString(16)).slice(-2);
+  }
+  return 'ENC_' + encrypted;
+}
+
+function decryptPin(encPin) {
+  if (!encPin) return '';
+  var str = String(encPin);
+  if (str.indexOf('ENC_') !== 0) return str; // support plain texts
+  var hex = str.substring(4);
+  var decrypted = '';
+  for (var i = 0; i < hex.length; i += 2) {
+    var hexPair = hex.substring(i, i + 2);
+    var charCode = parseInt(hexPair, 16);
+    var keyChar = SECRET_KEY.charCodeAt((i / 2) % SECRET_KEY.length);
+    decrypted += String.fromCharCode(charCode ^ keyChar);
+  }
+  return decrypted;
+}
+
+function padPin(pin) {
+  var str = String(pin).trim();
+  if (/^\d{1,3}$/.test(str)) {
+    return str.padStart(4, '0');
+  }
+  return str;
+}
+
 // ── Users ────────────────────────────────────────────────────
 function registerUser(data) {
   var sh = getSheet(SHEETS.USERS);
@@ -198,7 +244,15 @@ function registerUser(data) {
     }
   }
   var id = newId();
-  sh.appendRow([id, data.name, data.team, data.pin, new Date().toISOString()]);
+  try {
+    sh.getRange('D:D').setNumberFormat('@');
+  } catch(e) {}
+  var encryptedPin = encryptPin(data.pin);
+  var nextRow = sh.getLastRow() + 1;
+  sh.appendRow([id, data.name, data.team, encryptedPin, new Date().toISOString()]);
+  try {
+    sh.getRange(nextRow, 4).setNumberFormat('@');
+  } catch(e) {}
   return { success: true, id: id };
 }
 
@@ -207,7 +261,8 @@ function loginUser(data) {
   var { headers, rows } = sheetData(sh);
   for (var i = 0; i < rows.length; i++) {
     var row = rowToObj(headers, rows[i]);
-    if (row.name === data.name && row.team === data.team && String(row.pin) === String(data.pin)) {
+    var storedPin = padPin(decryptPin(row.pin));
+    if (row.name === data.name && row.team === data.team && String(storedPin) === String(data.pin)) {
       return { success: true, id: row.id, name: row.name, team: row.team };
     }
   }
@@ -677,5 +732,80 @@ function testWebhook(data) {
     return { success: false, message: '전송 실패 (HTTP ' + code + '): ' + resp.getContentText().slice(0, 150) };
   } catch(e) {
     return { success: false, message: '연결 오류: ' + e.toString() };
+  }
+}
+
+// ── Spreadsheet Custom Function for Administrator ───────────────────
+/**
+ * 암호화된 비밀번호를 복호화하여 평문으로 반환합니다.
+ *
+ * @param {string} encryptedPin 암호화된 비밀번호 (예: ENC_xxxx)
+ * @return {string} 복호화된 4자리 평문 비밀번호
+ * @customfunction
+ */
+function DECRYPT_PIN(encryptedPin) {
+  if (!encryptedPin) return '';
+  if (Array.isArray(encryptedPin)) {
+    return encryptedPin.map(function(row) {
+      return row.map(function(cell) {
+        return padPin(decryptPin(cell));
+      });
+    });
+  }
+  return padPin(decryptPin(encryptedPin));
+}
+
+// ── Spreadsheet Custom Menu ──────────────────────────────────────────
+function onOpen() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.createMenu('ChatAlarm 관리')
+      .addItem('🔑 선택한 셀 비밀번호 복호화/조회', 'decryptSelectedPin')
+      .addToUi();
+  } catch(e) {
+    // 웹앱 API 컨텍스트 등 UI가 없는 환경에서의 호출 에러 방지
+  }
+}
+
+function decryptSelectedPin() {
+  try {
+    var sheet = SpreadsheetApp.getActiveSheet();
+    var range = sheet.getActiveRange();
+    var values = range.getValues();
+    var msg = '';
+    var count = 0;
+    
+    for (var r = 0; r < values.length; r++) {
+      for (var c = 0; c < values[r].length; c++) {
+        var val = values[r][c];
+        if (val) {
+          var decrypted = padPin(decryptPin(val));
+          var rowNum = range.getRow() + r;
+          var colNum = range.getColumn() + c;
+          
+          var rowInfo = '';
+          if (sheet.getName() === SHEETS.USERS && rowNum > 1) {
+            var userName = sheet.getRange(rowNum, 2).getValue();
+            var userTeam = sheet.getRange(rowNum, 3).getValue();
+            if (userName) {
+              rowInfo = ' (' + userName + ' / ' + userTeam + ')';
+            }
+          }
+          
+          msg += '행 ' + rowNum + ', 열 ' + colNum + rowInfo + ': [ ' + decrypted + ' ]\n';
+          count++;
+        }
+      }
+    }
+    
+    if (count > 0) {
+      SpreadsheetApp.getUi().alert('🔑 [ChatAlarm] 비밀번호 복호화 결과\n\n' + msg);
+    } else {
+      SpreadsheetApp.getUi().alert('⚠️ 선택한 범위에 값이 비어 있습니다.');
+    }
+  } catch(e) {
+    try {
+      SpreadsheetApp.getUi().alert('오류 발생: ' + e.toString());
+    } catch(err) {}
   }
 }
