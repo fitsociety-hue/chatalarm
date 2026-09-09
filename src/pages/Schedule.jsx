@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../AuthContext';
 import { fetchGAS } from '../api';
 import Layout from '../components/Layout';
-import { Plus, Pencil, Trash2, X, AlertCircle, CheckCircle, CalendarClock, Calendar } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, AlertCircle, CheckCircle, CalendarClock, Calendar, Zap, RotateCw } from 'lucide-react';
 
 const formatToKST = (timeStr) => {
   if (!timeStr || timeStr === '-') return '-';
@@ -42,11 +42,34 @@ const formatToKST = (timeStr) => {
   return String(timeStr);
 };
 
-const DAY_LABELS = ['월', '화', '수', '목', '금'];
-const DAY_VALUES = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
+const getTodayDateString = () => {
+  const now = new Date();
+  const kstMs = now.getTime() + 9 * 3600000;
+  const kst = new Date(kstMs);
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, '0')}-${String(kst.getUTCDate()).padStart(2, '0')}`;
+};
+
+const getDayNameFromDate = (dateStr) => {
+  if (!dateStr) return '';
+  try {
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+      const days = ['일', '월', '화', '수', '목', '금', '토'];
+      return days[d.getDay()] || '';
+    }
+  } catch {}
+  return '';
+};
+
+const DAY_LABELS = ['월', '화', '수', '목', '금', '토', '일'];
+const DAY_VALUES = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
 const EMPTY_FORM = {
   name: '',
+  repeatType: 'WEEKLY', // 'ONCE' | 'WEEKLY' | 'MONTHLY'
+  targetDate: '',
+  monthlyDay: '1',
   days: ['MON', 'TUE', 'WED', 'THU', 'FRI'],
   time: '09:00',
   message: '',
@@ -86,13 +109,21 @@ export default function Schedule() {
   useEffect(() => { if (user) load(); }, [user]);
 
   const openAdd = () => {
-    setForm({ ...EMPTY_FORM, webhookId: webhooks[0]?.id || '' });
+    setForm({
+      ...EMPTY_FORM,
+      targetDate: getTodayDateString(),
+      webhookId: webhooks[0]?.id || '',
+    });
     setFormError(''); setEditItem(null); setNewExDate(''); setModal('add');
   };
+
   const openEdit = (item) => {
     setForm({
-      name: item.name,
-      days: item.days || ['MON','TUE','WED','THU','FRI'],
+      name: item.name || '',
+      repeatType: item.repeatType || 'WEEKLY',
+      targetDate: item.targetDate || getTodayDateString(),
+      monthlyDay: String(item.monthlyDay || '1'),
+      days: item.days && item.days.length > 0 ? item.days : ['MON','TUE','WED','THU','FRI'],
       time: formatToKST(item.time) || '09:00',
       message: item.message || '',
       webhookId: item.webhookId || '',
@@ -101,6 +132,7 @@ export default function Schedule() {
     });
     setFormError(''); setEditItem(item); setNewExDate(''); setModal('edit');
   };
+
   const closeModal = () => { setModal(null); setEditItem(null); };
 
   const toggleDay = (day) => {
@@ -110,20 +142,35 @@ export default function Schedule() {
     }));
   };
 
+  const setDaysPreset = (preset) => {
+    if (preset === 'weekdays') setForm(f => ({ ...f, days: ['MON', 'TUE', 'WED', 'THU', 'FRI'] }));
+    else if (preset === 'weekend') setForm(f => ({ ...f, days: ['SAT', 'SUN'] }));
+    else if (preset === 'all') setForm(f => ({ ...f, days: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'] }));
+  };
+
   const addExDate = () => {
     if (!newExDate) return;
     if (form.excludedDates.includes(newExDate)) { setNewExDate(''); return; }
     setForm(f => ({ ...f, excludedDates: [...f.excludedDates, newExDate].sort() }));
     setNewExDate('');
   };
+
   const removeExDate = (d) => setForm(f => ({ ...f, excludedDates: f.excludedDates.filter(x => x !== d) }));
 
   const handleSave = async () => {
     if (!form.name.trim()) { setFormError('스케줄 이름을 입력해 주세요.'); return; }
-    if (form.days.length === 0) { setFormError('요일을 하나 이상 선택해 주세요.'); return; }
     if (!form.time) { setFormError('발송 시간을 입력해 주세요.'); return; }
-    if (!form.message.trim()) { setFormError('발송 메시지를 입력해 주세요.'); return; }
     if (!form.webhookId) { setFormError('Webhook을 선택해 주세요.'); return; }
+    if (!form.message.trim()) { setFormError('발송 메시지를 입력해 주세요.'); return; }
+
+    if (form.repeatType === 'ONCE') {
+      if (!form.targetDate) { setFormError('1회 발송할 날짜를 선택해 주세요.'); return; }
+    } else if (form.repeatType === 'WEEKLY') {
+      if (form.days.length === 0) { setFormError('발송 요일을 하나 이상 선택해 주세요.'); return; }
+    } else if (form.repeatType === 'MONTHLY') {
+      if (!form.monthlyDay) { setFormError('매월 발송할 일자를 선택해 주세요.'); return; }
+    }
+
     setSaving(true); setFormError('');
     try {
       const payload = { userId: user.id, ...form };
@@ -155,11 +202,39 @@ export default function Schedule() {
 
   const webhookLabel = (id) => webhooks.find(w => w.id === id)?.label || id || '-';
 
+  const renderScheduleMeta = (item) => {
+    const repeatType = item.repeatType || 'WEEKLY';
+    const timeStr = formatToKST(item.time);
+    const whStr = webhookLabel(item.webhookId);
+
+    if (repeatType === 'ONCE') {
+      const dayName = getDayNameFromDate(item.targetDate);
+      return (
+        <span>
+          <strong>{item.targetDate || '-'}</strong>{dayName ? ` (${dayName})` : ''} · <strong>{timeStr}</strong> · {whStr}
+        </span>
+      );
+    }
+    if (repeatType === 'MONTHLY') {
+      const dayDisplay = item.monthlyDay === 'LAST' ? '말일' : `${item.monthlyDay || '1'}일`;
+      return (
+        <span>
+          <strong>매월 {dayDisplay}</strong> · <strong>{timeStr}</strong> · {whStr}
+        </span>
+      );
+    }
+    return (
+      <span>
+        <strong>{daysLabel(item.days)}</strong> · <strong>{timeStr}</strong> · {whStr}
+      </span>
+    );
+  };
+
   return (
     <Layout>
       <div className="page-header">
         <h1>발송 예약</h1>
-        <p>요일·시간·메시지를 설정하고 발송 제외일을 지정합니다</p>
+        <p>1회, 매주, 매월 주기와 시간·메시지를 설정하고 발송 제외일을 지정합니다</p>
       </div>
 
       {error   && <div className="alert alert-error"  ><AlertCircle size={16} style={{ flexShrink:0 }} />{error}</div>}
@@ -187,31 +262,49 @@ export default function Schedule() {
           </div>
         ) : (
           <div className="schedule-grid">
-            {schedules.map(item => (
-              <div key={item.id} className="schedule-item">
-                <div className="schedule-info">
-                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                    <div className="schedule-name">{item.name}</div>
-                    <span className={`badge ${item.active !== false ? 'badge-green' : 'badge-gray'}`}>
-                      {item.active !== false ? '활성' : '비활성'}
-                    </span>
-                  </div>
-                  <div className="schedule-meta">
-                    <strong>{daysLabel(item.days)}</strong> · <strong>{formatToKST(item.time)}</strong> · {webhookLabel(item.webhookId)}
-                  </div>
-                  {item.excludedDates?.length > 0 && (
-                    <div className="schedule-meta" style={{ marginTop: 4 }}>
-                      제외일: {item.excludedDates.join(', ')}
+            {schedules.map(item => {
+              const repeatType = item.repeatType || 'WEEKLY';
+              const isCompleted = repeatType === 'ONCE' && item.active === false;
+
+              return (
+                <div key={item.id} className="schedule-item">
+                  <div className="schedule-info">
+                    <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                      <div className="schedule-name">{item.name}</div>
+                      
+                      {/* 주기 뱃지 */}
+                      {repeatType === 'ONCE' && <span className="badge badge-purple">1회 발송</span>}
+                      {repeatType === 'WEEKLY' && <span className="badge badge-blue">매주 반복</span>}
+                      {repeatType === 'MONTHLY' && <span className="badge badge-teal">매월 반복</span>}
+
+                      {/* 상태 뱃지 */}
+                      {isCompleted ? (
+                        <span className="badge badge-gray">발송 완료</span>
+                      ) : (
+                        <span className={`badge ${item.active !== false ? 'badge-green' : 'badge-gray'}`}>
+                          {item.active !== false ? '활성' : '비활성'}
+                        </span>
+                      )}
                     </div>
-                  )}
-                  <div className="schedule-msg">{item.message}</div>
+
+                    <div className="schedule-meta" style={{ marginTop: 6 }}>
+                      {renderScheduleMeta(item)}
+                    </div>
+
+                    {item.excludedDates?.length > 0 && (
+                      <div className="schedule-meta" style={{ marginTop: 4 }}>
+                        제외일: {item.excludedDates.join(', ')}
+                      </div>
+                    )}
+                    <div className="schedule-msg">{item.message}</div>
+                  </div>
+                  <div className="schedule-actions">
+                    <button id={`sched-edit-${item.id}`} className="btn btn-ghost btn-sm btn-icon" onClick={() => openEdit(item)} title="수정"><Pencil size={14} /></button>
+                    <button id={`sched-del-${item.id}`}  className="btn btn-danger  btn-sm btn-icon" onClick={() => handleDelete(item)} title="삭제"><Trash2 size={14} /></button>
+                  </div>
                 </div>
-                <div className="schedule-actions">
-                  <button id={`sched-edit-${item.id}`} className="btn btn-ghost btn-sm btn-icon" onClick={() => openEdit(item)} title="수정"><Pencil size={14} /></button>
-                  <button id={`sched-del-${item.id}`}  className="btn btn-danger  btn-sm btn-icon" onClick={() => handleDelete(item)} title="삭제"><Trash2 size={14} /></button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -229,19 +322,93 @@ export default function Schedule() {
 
             <div className="form-group">
               <label className="form-label">스케줄 이름</label>
-              <input id="sched-form-name" className="form-input" placeholder="예) 주간 공지" value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} />
+              <input id="sched-form-name" className="form-input" placeholder="예) 주간 회의 공지" value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} />
             </div>
 
+            {/* 주기 선택 세그먼트 */}
             <div className="form-group">
-              <label className="form-label">발송 요일</label>
-              <div className="days-chips">
-                {DAY_VALUES.map((d, i) => (
-                  <span key={d} id={`day-chip-${d}`} className={`day-chip${form.days.includes(d) ? ' selected' : ''}`} onClick={() => toggleDay(d)}>
-                    {DAY_LABELS[i]}
-                  </span>
-                ))}
+              <label className="form-label">발송 주기</label>
+              <div className="repeat-tabs">
+                <button
+                  type="button"
+                  id="tab-repeat-once"
+                  className={`repeat-tab${form.repeatType === 'ONCE' ? ' active' : ''}`}
+                  onClick={() => setForm(f => ({ ...f, repeatType: 'ONCE', targetDate: f.targetDate || getTodayDateString() }))}
+                >
+                  <Zap size={14} />1회
+                </button>
+                <button
+                  type="button"
+                  id="tab-repeat-weekly"
+                  className={`repeat-tab${form.repeatType === 'WEEKLY' ? ' active' : ''}`}
+                  onClick={() => setForm(f => ({ ...f, repeatType: 'WEEKLY' }))}
+                >
+                  <RotateCw size={14} />매주
+                </button>
+                <button
+                  type="button"
+                  id="tab-repeat-monthly"
+                  className={`repeat-tab${form.repeatType === 'MONTHLY' ? ' active' : ''}`}
+                  onClick={() => setForm(f => ({ ...f, repeatType: 'MONTHLY' }))}
+                >
+                  <Calendar size={14} />매월
+                </button>
               </div>
             </div>
+
+            {/* 주기별 상세 설정 */}
+            {form.repeatType === 'ONCE' && (
+              <div className="form-group">
+                <label className="form-label">발송 날짜 (특정일 지정)</label>
+                <input
+                  id="sched-form-targetdate"
+                  className="form-input"
+                  type="date"
+                  min={getTodayDateString()}
+                  value={form.targetDate}
+                  onChange={e => setForm(f => ({ ...f, targetDate: e.target.value }))}
+                />
+                <p className="field-hint">💡 지정한 날짜에 1회 발송 후 자동으로 완료(비활성화)됩니다.</p>
+              </div>
+            )}
+
+            {form.repeatType === 'WEEKLY' && (
+              <div className="form-group">
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <label className="form-label" style={{ marginBottom: 0 }}>발송 요일</label>
+                  <div className="quick-days" style={{ marginTop: 0 }}>
+                    <button type="button" className="quick-day-btn" onClick={() => setDaysPreset('weekdays')}>평일</button>
+                    <button type="button" className="quick-day-btn" onClick={() => setDaysPreset('weekend')}>주말</button>
+                    <button type="button" className="quick-day-btn" onClick={() => setDaysPreset('all')}>매일</button>
+                  </div>
+                </div>
+                <div className="days-chips">
+                  {DAY_VALUES.map((d, i) => (
+                    <span key={d} id={`day-chip-${d}`} className={`day-chip${form.days.includes(d) ? ' selected' : ''}`} onClick={() => toggleDay(d)}>
+                      {DAY_LABELS[i]}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {form.repeatType === 'MONTHLY' && (
+              <div className="form-group">
+                <label className="form-label">발송 일자 (매월 지정일)</label>
+                <select
+                  id="sched-form-monthlyday"
+                  className="form-input"
+                  value={form.monthlyDay}
+                  onChange={e => setForm(f => ({ ...f, monthlyDay: e.target.value }))}
+                >
+                  {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                    <option key={day} value={String(day)}>매월 {day}일</option>
+                  ))}
+                  <option value="LAST">매월 말일 (해당 월의 마지막 날)</option>
+                </select>
+                <p className="field-hint">💡 28일/30일 달의 31일 설정 시 해당 월의 말일에 발송됩니다.</p>
+              </div>
+            )}
 
             <div className="form-group">
               <label className="form-label">발송 시간</label>
@@ -261,7 +428,7 @@ export default function Schedule() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">발송 제외일</label>
+              <label className="form-label">발송 제외일 (휴일/특정일)</label>
               <div style={{ display:'flex', gap:8 }}>
                 <input id="sched-form-exdate" className="form-input" type="date" value={newExDate} onChange={e => setNewExDate(e.target.value)} style={{ flex:1 }} />
                 <button id="sched-form-exdate-add" className="btn btn-secondary btn-sm" onClick={addExDate}><Calendar size={14} />추가</button>

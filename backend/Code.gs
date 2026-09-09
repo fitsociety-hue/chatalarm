@@ -166,14 +166,14 @@ function ensureSheetHeaders(sh, name) {
   var expectedHeaders = {
     Users:     ['id','name','team','pin','createdAt'],
     Webhooks:  ['id','userId','label','url','createdAt'],
-    Schedules: ['id','userId','name','days','time','message','webhookId','excludedDates','active','createdAt'],
+    Schedules: ['id','userId','name','repeatType','targetDate','monthlyDay','days','time','message','webhookId','excludedDates','active','createdAt'],
     Logs:      ['id','scheduleId','userId','sentAt','status','detail'],
   };
   var expected = expectedHeaders[name];
   if (!expected) return;
   
   var colCount = sh.getLastColumn();
-  var range = sh.getRange(1, 1, 1, colCount || 1);
+  var range = sh.getRange(1, 1, 1, Math.max(colCount, 1));
   var current = range.getValues()[0] || [];
   
   if (current.length === 0 || !current[0]) {
@@ -181,21 +181,21 @@ function ensureSheetHeaders(sh, name) {
     return;
   }
   
-  if (name === SHEETS.LOGS) {
-    var userIdIdx = current.indexOf('userId');
-    if (userIdIdx === -1) {
-      sh.insertColumnAfter(2); // B열 뒤에 삽입 (C열)
-      sh.getRange(1, 3).setValue('userId');
-      Logger.log('[ensureSheetHeaders] Logs 시트에 userId 컬럼을 추가했습니다.');
+  // 누락된 컬럼 자동 추가
+  expected.forEach(function(colName) {
+    if (current.indexOf(colName) === -1) {
+      var nextCol = sh.getLastColumn() + 1;
+      sh.getRange(1, nextCol).setValue(colName);
+      Logger.log('[ensureSheetHeaders] ' + name + ' 시트에 ' + colName + ' 컬럼을 추가했습니다.');
     }
-  }
+  });
 }
 
 function initSheet(sh, name) {
   var headers = {
     Users:     [['id','name','team','pin','createdAt']],
     Webhooks:  [['id','userId','label','url','createdAt']],
-    Schedules: [['id','userId','name','days','time','message','webhookId','excludedDates','active','createdAt']],
+    Schedules: [['id','userId','name','repeatType','targetDate','monthlyDay','days','time','message','webhookId','excludedDates','active','createdAt']],
     Logs:      [['id','scheduleId','userId','sentAt','status','detail']],
   };
   if (headers[name]) {
@@ -367,6 +367,9 @@ function getSchedules(data) {
       try { obj.excludedDates = JSON.parse(obj.excludedDates); } catch(e) { obj.excludedDates = []; }
       obj.active = obj.active !== false && obj.active !== 'false';
       obj.time = formatTimeValueToHHMM(obj.time, tz);
+      obj.repeatType = obj.repeatType || 'WEEKLY';
+      obj.targetDate = obj.targetDate ? String(obj.targetDate).substring(0, 10) : '';
+      obj.monthlyDay = obj.monthlyDay !== undefined && obj.monthlyDay !== '' ? obj.monthlyDay : 1;
       return obj;
     });
   return { success: true, data: result };
@@ -374,15 +377,27 @@ function getSchedules(data) {
 
 function addSchedule(data) {
   var sh = getSheet(SHEETS.SCHEDULES);
+  var { headers } = sheetData(sh);
   var id = newId();
-  sh.appendRow([
-    id, data.userId, data.name,
-    JSON.stringify(data.days || []),
-    data.time, data.message, data.webhookId,
-    JSON.stringify(data.excludedDates || []),
-    data.active !== false,
-    new Date().toISOString()
-  ]);
+  var record = {
+    id: id,
+    userId: data.userId,
+    name: data.name,
+    repeatType: data.repeatType || 'WEEKLY',
+    targetDate: data.targetDate || '',
+    monthlyDay: data.monthlyDay || '',
+    days: JSON.stringify(data.days || []),
+    time: data.time,
+    message: data.message,
+    webhookId: data.webhookId,
+    excludedDates: JSON.stringify(data.excludedDates || []),
+    active: data.active !== false,
+    createdAt: new Date().toISOString()
+  };
+  var row = headers.map(function(h) {
+    return record[h] !== undefined ? record[h] : '';
+  });
+  sh.appendRow(row);
   return { success: true, id: id };
 }
 
@@ -393,8 +408,16 @@ function updateSchedule(data) {
   for (var i = 0; i < rows.length; i++) {
     if (rows[i][idIdx] === data.scheduleId) {
       var rowNum = i + 2;
-      var setVal = function(col, val) { sh.getRange(rowNum, headers.indexOf(col) + 1).setValue(val); };
+      var setVal = function(col, val) {
+        var cIdx = headers.indexOf(col);
+        if (cIdx !== -1) {
+          sh.getRange(rowNum, cIdx + 1).setValue(val);
+        }
+      };
       setVal('name',          data.name);
+      setVal('repeatType',    data.repeatType || 'WEEKLY');
+      setVal('targetDate',    data.targetDate || '');
+      setVal('monthlyDay',    data.monthlyDay || '');
       setVal('days',          JSON.stringify(data.days || []));
       setVal('time',          data.time);
       setVal('message',       data.message);
@@ -683,22 +706,50 @@ function sendScheduledMessages() {
     Logger.log('[Trigger] 오늘 발송 완료 맵 크기=' + Object.keys(sentTodayMap).length);
   }
 
-  rows.forEach(function(row) {
+  rows.forEach(function(row, rIdx) {
     var sc = rowToObj(headers, row);
+    var rowNumber = rIdx + 2;
 
     // 1) 비활성
     if (sc.active === false || sc.active === 'false') return;
 
-    // 2) 요일 파싱
-    var days = [];
-    if (Array.isArray(sc.days)) {
-      days = sc.days;
-    } else {
-      try { days = JSON.parse(sc.days || '[]'); } catch(e) {
-        if (typeof sc.days === 'string') days = sc.days.split(',').map(function(s) { return s.trim(); });
+    var repeatType = sc.repeatType || 'WEEKLY';
+
+    // 2) 주기별 실행 여부 판별
+    if (repeatType === 'ONCE') {
+      // 1회 발송: 지정 날짜(targetDate) 일치 여부
+      var targetDateStr = String(sc.targetDate || '').substring(0, 10);
+      if (targetDateStr !== todayStr) {
+        return;
       }
+    } else if (repeatType === 'MONTHLY') {
+      // 매월 발송: 지정 일자(monthlyDay) 일치 여부
+      var daysInThisMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+      var targetMonthlyDay;
+      if (String(sc.monthlyDay).toUpperCase() === 'LAST' || Number(sc.monthlyDay) === 31) {
+        if (String(sc.monthlyDay).toUpperCase() === 'LAST') {
+          targetMonthlyDay = daysInThisMonth;
+        } else {
+          targetMonthlyDay = Math.min(Number(sc.monthlyDay), daysInThisMonth);
+        }
+      } else {
+        targetMonthlyDay = Math.min(Number(sc.monthlyDay) || 1, daysInThisMonth);
+      }
+      if (date !== targetMonthlyDay) {
+        return;
+      }
+    } else {
+      // 매주 발송: 지정 요일(days) 일치 여부
+      var days = [];
+      if (Array.isArray(sc.days)) {
+        days = sc.days;
+      } else {
+        try { days = JSON.parse(sc.days || '[]'); } catch(e) {
+          if (typeof sc.days === 'string') days = sc.days.split(',').map(function(s) { return s.trim(); });
+        }
+      }
+      if (days.indexOf(todayCode) === -1) return;
     }
-    if (days.indexOf(todayCode) === -1) return;
 
     // 3) 제외일
     var excl = [];
@@ -766,7 +817,7 @@ function sendScheduledMessages() {
     }
 
     // 7) 발송
-    Logger.log('[send] ' + sc.name + ' → ' + wh.url.substring(0, 60) + '...');
+    Logger.log('[send] ' + sc.name + ' (' + repeatType + ') → ' + wh.url.substring(0, 60) + '...');
     var logDetailPrefix = '[Time: ' + schedTime + '] ';
     try {
       var resp = UrlFetchApp.fetch(wh.url, {
@@ -779,6 +830,15 @@ function sendScheduledMessages() {
       var status = (code === 200 || code === 201) ? 'OK' : 'FAIL';
       logSend(sc.id, sc.userId, todayStr + ' ' + nowTime, status, logDetailPrefix + 'HTTP ' + code + ' ' + resp.getContentText().slice(0, 200));
       Logger.log('[send] ' + status + ' (HTTP ' + code + '): ' + sc.name);
+
+      // 1회성 스케줄 발송 성공 시 자동 비활성화
+      if (repeatType === 'ONCE' && status === 'OK') {
+        var activeColIdx = headers.indexOf('active');
+        if (activeColIdx !== -1) {
+          sh.getRange(rowNumber, activeColIdx + 1).setValue(false);
+          Logger.log('[send] 1회 발송 완료 -> 스케줄 자동 비활성화 완료: ' + sc.name);
+        }
+      }
     } catch(err) {
       logSend(sc.id, sc.userId, todayStr + ' ' + nowTime, 'ERROR', logDetailPrefix + err.toString());
       Logger.log('[send] ERROR: ' + sc.name + ' / ' + err.toString());

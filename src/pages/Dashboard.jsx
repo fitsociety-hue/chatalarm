@@ -22,6 +22,108 @@ const formatToKST = (timeStr) => {
   return String(timeStr);
 };
 
+const DAY_MAP = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+
+const computeNextSend = (activeSchedules) => {
+  if (!activeSchedules || activeSchedules.length === 0) return '-';
+
+  const now = new Date();
+  const kstNowMs = now.getTime() + 9 * 3600000;
+  const kstNow = new Date(kstNowMs);
+
+  const curYear = kstNow.getUTCFullYear();
+  const curMonth = kstNow.getUTCMonth();
+  const curDate = kstNow.getUTCDate();
+  const curHours = kstNow.getUTCHours();
+  const curMins = kstNow.getUTCMinutes();
+  const nowMinOfDay = curHours * 60 + curMins;
+
+  let earliestTimeMs = Infinity;
+
+  activeSchedules.forEach((sc) => {
+    const timeHHMM = formatToKST(sc.time);
+    const m = timeHHMM.match(/^(\d{2}):(\d{2})/);
+    if (!m) return;
+    const schedHour = parseInt(m[1], 10);
+    const schedMin = parseInt(m[2], 10);
+    const schedMinOfDay = schedHour * 60 + schedMin;
+
+    const repeatType = sc.repeatType || 'WEEKLY';
+
+    if (repeatType === 'ONCE') {
+      if (sc.targetDate) {
+        const parts = String(sc.targetDate).substring(0, 10).split('-');
+        if (parts.length === 3) {
+          const y = parseInt(parts[0], 10);
+          const mo = parseInt(parts[1], 10) - 1;
+          const d = parseInt(parts[2], 10);
+          const schedDate = new Date(Date.UTC(y, mo, d, schedHour, schedMin));
+          const schedMs = schedDate.getTime();
+          if (schedMs >= kstNowMs && schedMs < earliestTimeMs) {
+            earliestTimeMs = schedMs;
+          }
+        }
+      }
+    } else if (repeatType === 'WEEKLY') {
+      const days = Array.isArray(sc.days) ? sc.days : [];
+      if (days.length === 0) return;
+
+      const targetDayIndices = days.map(d => DAY_MAP[d]).filter(v => v !== undefined);
+      if (targetDayIndices.length === 0) return;
+
+      // Look ahead up to 7 days
+      for (let offset = 0; offset <= 7; offset++) {
+        const checkDay = (kstNow.getUTCDay() + offset) % 7;
+        if (targetDayIndices.includes(checkDay)) {
+          if (offset === 0 && schedMinOfDay <= nowMinOfDay) {
+            continue; // already passed today
+          }
+          const candidate = new Date(Date.UTC(curYear, curMonth, curDate + offset, schedHour, schedMin));
+          const candidateMs = candidate.getTime();
+          if (candidateMs < earliestTimeMs) {
+            earliestTimeMs = candidateMs;
+          }
+          break;
+        }
+      }
+    } else if (repeatType === 'MONTHLY') {
+      for (let moOffset = 0; moOffset <= 2; moOffset++) {
+        const targetMo = curMonth + moOffset;
+        const daysInMo = new Date(Date.UTC(curYear, targetMo + 1, 0)).getUTCDate();
+        let targetDay;
+        if (String(sc.monthlyDay).toUpperCase() === 'LAST' || parseInt(sc.monthlyDay, 10) === 31) {
+          targetDay = String(sc.monthlyDay).toUpperCase() === 'LAST' ? daysInMo : Math.min(parseInt(sc.monthlyDay, 10), daysInMo);
+        } else {
+          targetDay = Math.min(parseInt(sc.monthlyDay, 10) || 1, daysInMo);
+        }
+
+        const candidate = new Date(Date.UTC(curYear, targetMo, targetDay, schedHour, schedMin));
+        const candidateMs = candidate.getTime();
+        if (candidateMs >= kstNowMs && candidateMs < earliestTimeMs) {
+          earliestTimeMs = candidateMs;
+          break;
+        }
+      }
+    }
+  });
+
+  if (earliestTimeMs === Infinity) return '-';
+
+  const nextKst = new Date(earliestTimeMs);
+  const nYear = nextKst.getUTCFullYear();
+  const nMonth = nextKst.getUTCMonth() + 1;
+  const nDate = nextKst.getUTCDate();
+  const nTime = `${String(nextKst.getUTCHours()).padStart(2, '0')}:${String(nextKst.getUTCMinutes()).padStart(2, '0')}`;
+
+  if (nYear === curYear && nMonth === (curMonth + 1) && nDate === curDate) {
+    return `오늘 ${nTime} 예정`;
+  }
+  if (nYear === curYear && nMonth === (curMonth + 1) && nDate === (curDate + 1)) {
+    return `내일 ${nTime} 예정`;
+  }
+  return `${nMonth}월 ${nDate}일 ${nTime} 예정`;
+};
+
 export default function Dashboard() {
   const { user } = useAuth();
   const [stats, setStats]   = useState({ webhooks: 0, schedules: 0, nextSend: '-' });
@@ -43,11 +145,7 @@ export default function Dashboard() {
         const webhooks   = (wh.data || []).length;
         const schedules  = (sc.data || []).length;
         const active     = (sc.data || []).filter(s => s.active);
-        let nextSend = '-';
-        if (active.length > 0) {
-          const rawTimes = active.map(s => s.time).filter(Boolean).sort();
-          if (rawTimes.length > 0) nextSend = formatToKST(rawTimes[0]) + ' 발송 예정';
-        }
+        const nextSend   = computeNextSend(active);
         setStats({ webhooks, schedules, nextSend });
         if (st.success) setStatus(st);
       })
