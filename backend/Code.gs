@@ -368,7 +368,7 @@ function getSchedules(data) {
       obj.active = obj.active !== false && obj.active !== 'false';
       obj.time = formatTimeValueToHHMM(obj.time, tz);
       obj.repeatType = obj.repeatType || 'WEEKLY';
-      obj.targetDate = obj.targetDate ? String(obj.targetDate).substring(0, 10) : '';
+      obj.targetDate = formatDateValueToYYYYMMDD(obj.targetDate, tz);
       obj.monthlyDay = obj.monthlyDay !== undefined && obj.monthlyDay !== '' ? obj.monthlyDay : 1;
       return obj;
     });
@@ -384,7 +384,7 @@ function addSchedule(data) {
     userId: data.userId,
     name: data.name,
     repeatType: data.repeatType || 'WEEKLY',
-    targetDate: data.targetDate || '',
+    targetDate: formatDateValueToYYYYMMDD(data.targetDate) || '',
     monthlyDay: data.monthlyDay || '',
     days: JSON.stringify(data.days || []),
     time: data.time,
@@ -416,7 +416,7 @@ function updateSchedule(data) {
       };
       setVal('name',          data.name);
       setVal('repeatType',    data.repeatType || 'WEEKLY');
-      setVal('targetDate',    data.targetDate || '');
+      setVal('targetDate',    formatDateValueToYYYYMMDD(data.targetDate) || '');
       setVal('monthlyDay',    data.monthlyDay || '');
       setVal('days',          JSON.stringify(data.days || []));
       setVal('time',          data.time);
@@ -587,40 +587,71 @@ function getStatus(data) {
   };
 }
 
-// ── 시간 포맷 헬퍼 ────────────────────────────────────────────
+// ── 날짜 포맷 헬퍼 (YYYY-MM-DD) ──────────────────────────────────
+function formatDateValueToYYYYMMDD(val, tz) {
+  if (!val) return '';
+  var timezone = tz || 'Asia/Seoul';
+  if (val instanceof Date) {
+    var y = val.getFullYear();
+    var m = val.getMonth() + 1;
+    var d = val.getDate();
+    return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+  }
+  var str = String(val).trim();
+  var match = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (match) {
+    return match[1] + '-' + String(match[2]).padStart(2, '0') + '-' + String(match[3]).padStart(2, '0');
+  }
+  if (str.indexOf('T') !== -1) {
+    try {
+      var dt = new Date(str);
+      if (!isNaN(dt.getTime())) {
+        var kstMs = dt.getTime() + 9 * 3600000;
+        var kst = new Date(kstMs);
+        return kst.getUTCFullYear() + '-' + String(kst.getUTCMonth() + 1).padStart(2, '0') + '-' + String(kst.getUTCDate()).padStart(2, '0');
+      }
+    } catch(e) {}
+  }
+  try {
+    var dt2 = new Date(str);
+    if (!isNaN(dt2.getTime()) && dt2.getFullYear() > 1970) {
+      var y2 = dt2.getFullYear();
+      var m2 = dt2.getMonth() + 1;
+      var d2 = dt2.getDate();
+      return y2 + '-' + String(m2).padStart(2, '0') + '-' + String(d2).padStart(2, '0');
+    }
+  } catch(e) {}
+  return str.substring(0, 10);
+}
+
+// ── 시간 포맷 헬퍼 (HH:mm) ────────────────────────────────────
 function formatTimeValueToHHMM(val, tz) {
   if (!val) return '';
   var timezone = tz || 'Asia/Seoul';
   if (val instanceof Date) {
-    return Utilities.formatDate(val, timezone, 'HH:mm');
+    var h = val.getHours();
+    var m = val.getMinutes();
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
   }
   var str = String(val).trim();
   if (str.indexOf('T') !== -1) {
     try {
       var d = new Date(str);
-      if (!isNaN(d.getTime())) return Utilities.formatDate(d, timezone, 'HH:mm');
+      if (!isNaN(d.getTime())) {
+        var kstMs = d.getTime() + 9 * 3600000;
+        var kst = new Date(kstMs);
+        return String(kst.getUTCHours()).padStart(2, '0') + ':' + String(kst.getUTCMinutes()).padStart(2, '0');
+      }
     } catch(e) {}
   }
-  var match = str.match(/^(\d{2}):(\d{2})/);
-  if (match) return match[1] + ':' + match[2];
+  var match = str.match(/^(\d{1,2}):(\d{2})/);
+  if (match) return String(match[1]).padStart(2, '0') + ':' + match[2];
   return str;
 }
 
 // ── KST 날짜 문자열 추출 ──────────────────────────────────────
 function extractDateFromSentAt(sentAtVal, tz) {
-  if (!sentAtVal) return '';
-  var timezone = tz || 'Asia/Seoul';
-  if (sentAtVal instanceof Date) {
-    return Utilities.formatDate(sentAtVal, timezone, 'yyyy-MM-dd');
-  }
-  var str = String(sentAtVal).trim();
-  var m = str.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (m) return m[1];
-  try {
-    var d = new Date(str);
-    if (!isNaN(d.getTime())) return Utilities.formatDate(d, timezone, 'yyyy-MM-dd');
-  } catch(e) {}
-  return str.substring(0, 10);
+  return formatDateValueToYYYYMMDD(sentAtVal, tz);
 }
 
 // ── 예약 알림 발송 (1분 트리거로 실행) ──────────────────────
@@ -685,14 +716,7 @@ function sendScheduledMessages() {
             loggedTime = m[1];
           } else {
             // 하위 호환성: 기존 로그에 [Time: ...]이 없는 경우, sentAt의 시간 부분을 사용
-            if (r[satIdx] instanceof Date) {
-              loggedTime = Utilities.formatDate(r[satIdx], tz, 'HH:mm');
-            } else {
-              var tMatch = String(r[satIdx]).match(/(\d{2}):(\d{2})/);
-              if (tMatch) {
-                loggedTime = tMatch[1] + ':' + tMatch[2];
-              }
-            }
+            loggedTime = formatTimeValueToHHMM(r[satIdx], tz);
           }
           if (loggedTime) {
             sentTodayMap[sId + '_' + loggedTime] = true;
@@ -718,7 +742,7 @@ function sendScheduledMessages() {
     // 2) 주기별 실행 여부 판별
     if (repeatType === 'ONCE') {
       // 1회 발송: 지정 날짜(targetDate) 일치 여부
-      var targetDateStr = String(sc.targetDate || '').substring(0, 10);
+      var targetDateStr = formatDateValueToYYYYMMDD(sc.targetDate, tz);
       if (targetDateStr !== todayStr) {
         return;
       }
@@ -760,7 +784,9 @@ function sendScheduledMessages() {
         if (typeof sc.excludedDates === 'string') excl = sc.excludedDates.split(',').map(function(s) { return s.trim(); });
       }
     }
-    if (excl.indexOf(todayStr) !== -1) {
+    // 제외일도 YYYY-MM-DD로 포맷하여 비교
+    var normalizedExcl = excl.map(function(d) { return formatDateValueToYYYYMMDD(d, tz); });
+    if (normalizedExcl.indexOf(todayStr) !== -1) {
       Logger.log('[skip] 제외일: ' + sc.name);
       return;
     }
@@ -779,16 +805,8 @@ function sendScheduledMessages() {
     // 4.5) 금일 생성/수정 여부 및 시각 비교 (소급 발송 방지)
     if (sc.createdAt) {
       try {
-        var createdMs = new Date(sc.createdAt).getTime() + 9 * 3600000;
-        var createdKst = new Date(createdMs);
-        var cYear   = createdKst.getUTCFullYear();
-        var cMonth  = createdKst.getUTCMonth();
-        var cDate   = createdKst.getUTCDate();
-        var cHour   = createdKst.getUTCHours();
-        var cMinute = createdKst.getUTCMinutes();
-        
-        var createdDateStr = cYear + '-' + String(cMonth + 1).padStart(2, '0') + '-' + String(cDate).padStart(2, '0');
-        var createdTimeStr = String(cHour).padStart(2, '0') + ':' + String(cMinute).padStart(2, '0');
+        var createdDateStr = formatDateValueToYYYYMMDD(sc.createdAt, tz);
+        var createdTimeStr = formatTimeValueToHHMM(sc.createdAt, tz);
 
         if (createdDateStr === todayStr && createdTimeStr > schedTime) {
           Logger.log('[skip] 금일 생성/수정됨 (생성시간 ' + createdTimeStr + ' > 예약시간 ' + schedTime + '): ' + sc.name);

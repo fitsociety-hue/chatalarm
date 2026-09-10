@@ -42,6 +42,35 @@ const formatToKST = (timeStr) => {
   return String(timeStr);
 };
 
+const normalizeDateStr = (dateVal) => {
+  if (!dateVal) return '';
+  const str = String(dateVal).trim();
+  const match = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (match) {
+    return `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+  }
+  if (str.includes('T')) {
+    try {
+      const dt = new Date(str);
+      if (!isNaN(dt.getTime())) {
+        const kstMs = dt.getTime() + 9 * 3600000;
+        const kst = new Date(kstMs);
+        return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, '0')}-${String(kst.getUTCDate()).padStart(2, '0')}`;
+      }
+    } catch {}
+  }
+  try {
+    const dt2 = new Date(str);
+    if (!isNaN(dt2.getTime()) && dt2.getFullYear() > 1970) {
+      const y = dt2.getFullYear();
+      const m = String(dt2.getMonth() + 1).padStart(2, '0');
+      const d = String(dt2.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  } catch {}
+  return str.substring(0, 10);
+};
+
 const getTodayDateString = () => {
   const now = new Date();
   const kstMs = now.getTime() + 9 * 3600000;
@@ -50,9 +79,10 @@ const getTodayDateString = () => {
 };
 
 const getDayNameFromDate = (dateStr) => {
-  if (!dateStr) return '';
+  const normalized = normalizeDateStr(dateStr);
+  if (!normalized) return '';
   try {
-    const parts = dateStr.split('-');
+    const parts = normalized.split('-');
     if (parts.length === 3) {
       const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
       const days = ['일', '월', '화', '수', '목', '금', '토'];
@@ -121,7 +151,7 @@ export default function Schedule() {
     setForm({
       name: item.name || '',
       repeatType: item.repeatType || 'WEEKLY',
-      targetDate: item.targetDate || getTodayDateString(),
+      targetDate: normalizeDateStr(item.targetDate) || getTodayDateString(),
       monthlyDay: String(item.monthlyDay || '1'),
       days: item.days && item.days.length > 0 ? item.days : ['MON','TUE','WED','THU','FRI'],
       time: formatToKST(item.time) || '09:00',
@@ -208,10 +238,11 @@ export default function Schedule() {
     const whStr = webhookLabel(item.webhookId);
 
     if (repeatType === 'ONCE') {
-      const dayName = getDayNameFromDate(item.targetDate);
+      const normalizedDate = normalizeDateStr(item.targetDate);
+      const dayName = getDayNameFromDate(normalizedDate);
       return (
         <span>
-          <strong>{item.targetDate || '-'}</strong>{dayName ? ` (${dayName})` : ''} · <strong>{timeStr}</strong> · {whStr}
+          <strong>{normalizedDate || '-'}</strong>{dayName ? ` (${dayName})` : ''} · <strong>{timeStr}</strong> · {whStr}
         </span>
       );
     }

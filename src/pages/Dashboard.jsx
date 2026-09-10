@@ -22,6 +22,35 @@ const formatToKST = (timeStr) => {
   return String(timeStr);
 };
 
+const normalizeDateStr = (dateVal) => {
+  if (!dateVal) return '';
+  const str = String(dateVal).trim();
+  const match = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (match) {
+    return `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+  }
+  if (str.includes('T')) {
+    try {
+      const dt = new Date(str);
+      if (!isNaN(dt.getTime())) {
+        const kstMs = dt.getTime() + 9 * 3600000;
+        const kst = new Date(kstMs);
+        return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, '0')}-${String(kst.getUTCDate()).padStart(2, '0')}`;
+      }
+    } catch {}
+  }
+  try {
+    const dt2 = new Date(str);
+    if (!isNaN(dt2.getTime()) && dt2.getFullYear() > 1970) {
+      const y = dt2.getFullYear();
+      const m = String(dt2.getMonth() + 1).padStart(2, '0');
+      const d = String(dt2.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  } catch {}
+  return str.substring(0, 10);
+};
+
 const DAY_MAP = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
 
 const computeNextSend = (activeSchedules) => {
@@ -52,7 +81,8 @@ const computeNextSend = (activeSchedules) => {
 
     if (repeatType === 'ONCE') {
       if (sc.targetDate) {
-        const parts = String(sc.targetDate).substring(0, 10).split('-');
+        const dateStr = normalizeDateStr(sc.targetDate);
+        const parts = dateStr.split('-');
         if (parts.length === 3) {
           const y = parseInt(parts[0], 10);
           const mo = parseInt(parts[1], 10) - 1;
